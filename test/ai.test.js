@@ -1,0 +1,165 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const {
+  analyzeNumber,
+  features,
+  scoreKnownBadges,
+  createKnownBadgeScorer,
+} = require("../official-engine");
+const {
+  defaultConfig,
+  normalizeConfig,
+  scoreNumber,
+  computeOptimalThresholds,
+  decide,
+  prewarmCollection,
+} = require("../games");
+
+test("official calculator produces the game's exact score and percentile", () => {
+  const result = analyzeNumber(314_159);
+  assert.equal(result.totalScore, 25_007_367);
+  assert.equal(result.scoringBadges.length > 0, true);
+});
+
+test("all known badges reproduce the official scoring engine total", () => {
+  const config = defaultConfig().games.composition;
+  const result = scoreNumber(314_159, config);
+  assert.equal(result.score, analyzeNumber(314_159).totalScore);
+});
+
+test("partial knowledge adjustment matches direct official badge scoring", () => {
+  const known = new Set(features
+    .filter(({ id }) => !["VOID", "ODD", "LIFTOFF", "HILLS"].includes(id))
+    .map(({ id }) => id));
+  const scoreKnown = createKnownBadgeScorer(known);
+  for (const number of [0, 69, 123, 314_151, 314_159, 999_999, 1_000_000]) {
+    assert.equal(scoreKnown(number), scoreKnownBadges(number, known).score);
+  }
+});
+
+test("unknown official high-score badges are excluded from the computed score", () => {
+  const number = 69;
+  const analysis = analyzeNumber(number);
+  const badgeId = analysis.scoringBadges[0];
+  const config = defaultConfig().games.composition;
+  for (const feature of features) config.knowledge[feature.id] = { known: false };
+  config.knowledge[badgeId] = { known: true };
+
+  const result = scoreNumber(number, config);
+  assert.equal(result.score, features.find((feature) => feature.id === badgeId).score);
+  assert.deepEqual(result.scoringBadges, [badgeId]);
+  assert.ok(result.score < analysis.totalScore);
+});
+
+test("knowledge settings are independent between games", () => {
+  const config = normalizeConfig({
+    games: {
+      collection: { knowledge: { PRIME: { known: false } } },
+    },
+  });
+  assert.equal(config.games.collection.knowledge.PRIME.known, false);
+  assert.equal(config.games.composition.knowledge.PRIME.known, true);
+  assert.equal(config.games.target.knowledge.PRIME.known, true);
+});
+
+test("Digit Composition enumerates legal key positions and uses official badge scoring", async () => {
+  const config = defaultConfig();
+  const result = await decide("composition", {
+    key: [1, 4, 8],
+    open: [0, 2, 3, 5, 9],
+  }, config);
+  assert.equal(String(result.number).length, 6);
+  assert.equal(result.arrangement[1][0], "k");
+  assert.equal(result.arrangement[4][0], "k");
+  assert.notEqual(result.arrangement[1], result.arrangement[4]);
+  assert.equal(new Set(result.arrangement).size, 6);
+  assert.equal(result.score, analyzeNumber(result.number).totalScore);
+});
+
+test("Time Collection uses exact optimal thresholds and never replaces an accepted number", async () => {
+  const config = defaultConfig();
+  const forced = await decide("collection", {
+    current: 314_159,
+    remainingTurns: 2,
+    slotsRemaining: 2,
+  }, config);
+  assert.equal(forced.action, "take");
+  assert.equal(forced.forced, true);
+
+  const full = await decide("collection", {
+    current: 314_159,
+    remainingTurns: 10,
+    slotsRemaining: 0,
+  }, config);
+  assert.equal(full.action, "skip");
+  assert.equal(Object.hasOwn(full, "replace"), false);
+});
+
+test("Time Collection derives its score distribution from the user's JavaScript scoring config", async () => {
+  const config = defaultConfig();
+  for (const feature of features) config.games.collection.knowledge[feature.id] = { known: false };
+  const decision = await decide("collection", {
+    current: 69,
+    remainingTurns: 3,
+    slotsRemaining: 1,
+  }, config);
+  assert.equal(decision.score, 0);
+  assert.equal(decision.threshold, 0);
+  assert.equal(decision.action, "take");
+});
+
+test("Time Collection prewarming shares the personalized distribution with later decisions", async () => {
+  const config = defaultConfig();
+  for (const feature of features) config.games.collection.knowledge[feature.id] = { known: false };
+  const firstWarmup = prewarmCollection(config);
+  assert.equal(firstWarmup, prewarmCollection(config));
+  await firstWarmup;
+
+  const decision = await decide("collection", {
+    current: 69,
+    remainingTurns: 3,
+    slotsRemaining: 1,
+  }, config);
+  assert.equal(decision.score, 0);
+  assert.equal(decision.threshold, 0);
+});
+
+test("optimal stopping thresholds use the exact finite-horizon recurrence", () => {
+  const thresholds = computeOptimalThresholds([0, 10, 20, 30], 3, 1);
+  assert.equal(thresholds[1][1], Number.NEGATIVE_INFINITY);
+  assert.equal(thresholds[2][1], 15);
+  assert.equal(thresholds[3][1], 20);
+});
+
+test("Target Chase changes exactly one legal digit and minimizes known-score distance", async () => {
+  const result = await decide("target", { number: 314_159, target: 27_182_800 }, defaultConfig());
+  const before = String(314_159);
+  const after = String(result.result);
+  assert.equal(before.length, after.length);
+  assert.equal(before.split("").filter((digit, index) => digit !== after[index]).length, 1);
+  assert.equal(Number(after[result.position]), result.replacement);
+  assert.equal(result.score, analyzeNumber(result.result).totalScore);
+});
+
+test("decisions reject unknown games and malformed game inputs", async () => {
+  await assert.rejects(() => decide("poker", {}, defaultConfig()), /Unknown game/);
+  await assert.rejects(() => decide("composition", {
+    key: [1, 2],
+    open: [0, 1, 2, 3, 4],
+  }, defaultConfig()), /exactly 3/);
+  await assert.rejects(() => decide("collection", {
+    current: 2,
+    remainingTurns: 2,
+    slotsRemaining: 3,
+  }, defaultConfig()), /slotsRemaining/);
+  await assert.rejects(
+    () => decide("target", { number: 314_159, target: 12.5 }, defaultConfig()),
+    /integer between 0 and/,
+  );
+  await assert.rejects(
+    () => decide("target", { number: 1_000_001, target: 0 }, defaultConfig()),
+    /between 0 and 1000000/,
+  );
+});
