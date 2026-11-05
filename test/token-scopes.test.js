@@ -9,7 +9,14 @@ const crypto = require("node:crypto");
 const { Readable } = require("node:stream");
 const { createApiHandler } = require("../api");
 const { createUserService } = require("../users");
-const { defaultConfig, FEATURES } = require("../games");
+const { defaultConfig, FEATURES, isUncommonNumber } = require("../games");
+
+function findCommonNumber() {
+  for (let number = 0; number <= 1_000_000; number++) {
+    if (!isUncommonNumber(number)) return number;
+  }
+  throw new Error("No number below the Uncommon percentile cutoff was found");
+}
 
 function createResponse() {
   return {
@@ -55,6 +62,42 @@ async function createFixture(t) {
   return { api, dataFile, users, user, sessionToken, compositionToken, targetToken };
 }
 
+test("Time Collection only generates and accepts Uncommon-or-higher numbers", async (t) => {
+  const { api, users, user, sessionToken } = await createFixture(t);
+  const collectionToken = await users.createApiToken(user, "collection-only", ["collection"]);
+  const game = await request(api, "POST", "/api/games", collectionToken.token, { game: "collection" });
+  const generated = await request(
+    api,
+    "POST",
+    `/api/games/${game.body.game_id}/collection-number`,
+    collectionToken.token,
+    {},
+  );
+  assert.equal(generated.status, 200);
+  assert.equal(isUncommonNumber(generated.body.number), true);
+  assert.ok(generated.body.percentile >= 50);
+
+  const belowThresholdNumber = findCommonNumber();
+  const commonNumber = await request(
+    api,
+    "POST",
+    `/api/games/${game.body.game_id}/decide`,
+    collectionToken.token,
+    { current: belowThresholdNumber, remainingTurns: 10, slotsRemaining: 3 },
+  ).then((result) => result, (error) => ({ status: error.status, body: { error: error.message } }));
+  assert.equal(commonNumber.status, 400);
+  assert.match(commonNumber.body.error, /Uncommon or higher/);
+
+  const allowedNumber = await request(
+    api,
+    "POST",
+    `/api/games/${game.body.game_id}/decide`,
+    collectionToken.token,
+    { current: generated.body.number, remainingTurns: 10, slotsRemaining: 3 },
+  );
+  assert.equal(allowedNumber.status, 200);
+});
+
 test("personal usage statistics default to zero and count per-game API usage", async (t) => {
   const { api, dataFile, sessionToken, compositionToken, targetToken } = await createFixture(t);
   const initial = await request(api, "GET", "/api/me/stats", sessionToken);
@@ -75,6 +118,33 @@ test("personal usage statistics default to zero and count per-game API usage", a
     compositionToken.token,
     { game: "composition" },
   );
+  const score = await request(
+    api,
+    "POST",
+    `/api/games/${compositionGame.body.game_id}/score`,
+    compositionToken.token,
+    { number: 314159 },
+  );
+  assert.equal(score.status, 200);
+  assert.equal(typeof score.body.score, "number");
+  assert.ok(Array.isArray(score.body.matched));
+  const crossTokenScore = await request(
+    api,
+    "POST",
+    `/api/games/${compositionGame.body.game_id}/score`,
+    targetToken.token,
+    { number: 314159 },
+  ).then((result) => result, (error) => ({ status: error.status }));
+  assert.equal(crossTokenScore.status, 403);
+  const invalidScore = await request(
+    api,
+    "POST",
+    `/api/games/${compositionGame.body.game_id}/score`,
+    compositionToken.token,
+    { number: 1.5 },
+  ).then((result) => result, (error) => ({ status: error.status }));
+  assert.equal(invalidScore.status, 400);
+
   await request(
     api,
     "POST",
@@ -91,20 +161,20 @@ test("personal usage statistics default to zero and count per-game API usage", a
   );
 
   const measured = await request(api, "GET", "/api/me/stats", sessionToken);
-  assert.equal(measured.body.games.composition.apiCalls, 2);
+  assert.equal(measured.body.games.composition.apiCalls, 3);
   assert.equal(measured.body.games.composition.decisions, 1);
   assert.equal(measured.body.games.composition.games, 1);
-  assert.equal(measured.body.games.composition.frequency.hour, 2);
-  assert.equal(measured.body.games.composition.frequency.day, 2);
-  assert.equal(measured.body.games.composition.frequency.month, 2);
-  assert.equal(measured.body.games.composition.frequency.year, 2);
+  assert.equal(measured.body.games.composition.frequency.hour, 3);
+  assert.equal(measured.body.games.composition.frequency.day, 3);
+  assert.equal(measured.body.games.composition.frequency.month, 3);
+  assert.equal(measured.body.games.composition.frequency.year, 3);
   assert.equal(measured.body.games.target.apiCalls, 1);
   assert.equal(measured.body.games.target.decisions, 0);
   assert.equal(measured.body.games.target.games, 1);
-  assert.equal(measured.body.total.apiCalls, 3);
+  assert.equal(measured.body.total.apiCalls, 4);
   assert.equal(measured.body.total.decisions, 1);
   assert.equal(measured.body.total.games, 2);
-  assert.equal(measured.body.total.frequency.day, 3);
+  assert.equal(measured.body.total.frequency.day, 4);
   const persisted = JSON.parse(await fs.readFile(dataFile, "utf8"));
   assert.equal(persisted.users.token_user.usageStats.games.composition.decisions, 1);
   assert.equal(persisted.users.token_user.usageStats.games.target.games, 1);
@@ -127,6 +197,21 @@ test("API token settings and allowed games are isolated per token", async (t) =>
   const targetConfig = profile.body.apiTokens.find(({ id }) => id === targetToken.id).config;
   assert.equal(compositionConfig.games.composition.knowledge.PRIME.known, false);
   assert.equal(targetConfig.games.composition.knowledge.PRIME.known, true);
+  const compositionGame = await request(
+    api,
+    "POST",
+    "/api/games",
+    compositionToken.token,
+    { game: "composition" },
+  );
+  const score = await request(
+    api,
+    "POST",
+    `/api/games/${compositionGame.body.game_id}/score`,
+    compositionToken.token,
+    { number: 314159 },
+  );
+  assert.equal(score.body.score, 0);
   const apiProfile = await request(api, "GET", "/api/me", compositionToken.token);
   assert.deepEqual(apiProfile.body.apiTokens.map(({ id }) => id), [compositionToken.id]);
 

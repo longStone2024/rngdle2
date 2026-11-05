@@ -5,6 +5,8 @@ const assert = require("node:assert/strict");
 const {
   analyzeNumber,
   features,
+  isUncommonNumber,
+  percentileForNumber,
   scoreKnownBadges,
   createKnownBadgeScorer,
 } = require("../official-engine");
@@ -16,6 +18,13 @@ const {
   decide,
   prewarmCollection,
 } = require("../games");
+
+function findCommonNumber() {
+  for (let number = 0; number <= 1_000_000; number++) {
+    if (!isUncommonNumber(number)) return number;
+  }
+  throw new Error("No number below the Uncommon percentile cutoff was found");
+}
 
 test("official calculator produces the game's exact score and percentile", () => {
   const result = analyzeNumber(314_159);
@@ -70,7 +79,7 @@ test("Digit Composition enumerates legal key positions and uses official badge s
     key: [1, 4, 8],
     open: [0, 2, 3, 5, 9],
   }, config);
-  assert.equal(String(result.number).length, 6);
+  assert.equal(result.digits.length, 6);
   assert.equal(result.arrangement[1][0], "k");
   assert.equal(result.arrangement[4][0], "k");
   assert.notEqual(result.arrangement[1], result.arrangement[4]);
@@ -78,7 +87,30 @@ test("Digit Composition enumerates legal key positions and uses official badge s
   assert.equal(result.score, analyzeNumber(result.number).totalScore);
 });
 
+test("Digit Composition accepts and preserves a leading zero", async () => {
+  const result = await decide("composition", {
+    key: [0, 0, 0],
+    open: [0, 0, 0, 0, 0],
+  }, defaultConfig());
+  assert.equal(result.digits, "000000");
+  assert.equal(result.number, 0);
+  assert.equal(result.arrangement[1][0], "k");
+  assert.equal(result.arrangement[4][0], "k");
+});
+
 test("Time Collection uses exact optimal thresholds and never replaces an accepted number", async () => {
+  assert.equal(isUncommonNumber(314_159), true);
+  assert.ok(percentileForNumber(314_159) >= 50);
+  const commonNumber = findCommonNumber();
+  assert.equal(isUncommonNumber(commonNumber), false);
+  await assert.rejects(
+    () => decide("collection", {
+      current: commonNumber,
+      remainingTurns: 10,
+      slotsRemaining: 3,
+    }, defaultConfig()),
+    /Uncommon or higher/,
+  );
   const config = defaultConfig();
   const forced = await decide("collection", {
     current: 314_159,
@@ -101,7 +133,7 @@ test("Time Collection derives its score distribution from the user's JavaScript 
   const config = defaultConfig();
   for (const feature of features) config.games.collection.knowledge[feature.id] = { known: false };
   const decision = await decide("collection", {
-    current: 69,
+    current: 314_159,
     remainingTurns: 3,
     slotsRemaining: 1,
   }, config);
@@ -118,7 +150,7 @@ test("Time Collection prewarming shares the personalized distribution with later
   await firstWarmup;
 
   const decision = await decide("collection", {
-    current: 69,
+    current: 314_159,
     remainingTurns: 3,
     slotsRemaining: 1,
   }, config);
@@ -150,7 +182,7 @@ test("decisions reject unknown games and malformed game inputs", async () => {
     open: [0, 1, 2, 3, 4],
   }, defaultConfig()), /exactly 3/);
   await assert.rejects(() => decide("collection", {
-    current: 2,
+    current: 314_159,
     remainingTurns: 2,
     slotsRemaining: 3,
   }, defaultConfig()), /slotsRemaining/);

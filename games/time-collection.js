@@ -1,6 +1,10 @@
 "use strict";
 
-const { createKnownBadgeScorer } = require("../official-engine");
+const {
+  UNCOMMON_SCORE_THRESHOLD,
+  createKnownBadgeScorer,
+  isUncommonNumber,
+} = require("../official-engine");
 const {
   DEFAULT_SLOTS,
   DEFAULT_TURNS,
@@ -13,6 +17,7 @@ const MAX_NUMBER = 1_000_000;
 const DISTRIBUTION_SIZE = MAX_NUMBER + 1;
 const MAX_CACHED_DISTRIBUTIONS = 4;
 const distributionCache = new Map();
+let eligibleNumbersPromise;
 
 function lowerBound(sorted, target) {
   let low = 0;
@@ -65,21 +70,48 @@ function distributionKey(known) {
 }
 
 async function buildThresholds(known) {
-  const scores = new Uint32Array(DISTRIBUTION_SIZE);
+  const eligibleNumbers = await getEligibleNumbers();
+  const scores = new Uint32Array(eligibleNumbers.length);
   const scoreKnown = createKnownBadgeScorer(known);
   const batchSize = 512;
-  for (let start = 0; start < DISTRIBUTION_SIZE; start += batchSize) {
-    const end = Math.min(start + batchSize, DISTRIBUTION_SIZE);
-    for (let number = start; number < end; number++) {
-      scores[number] = scoreKnown(number);
+  for (let start = 0; start < eligibleNumbers.length; start += batchSize) {
+    const end = Math.min(start + batchSize, eligibleNumbers.length);
+    for (let index = start; index < end; index++) {
+      scores[index] = scoreKnown(eligibleNumbers[index]);
     }
-    if (end < DISTRIBUTION_SIZE) {
+    if (end < eligibleNumbers.length) {
       await new Promise((resolve) => setImmediate(resolve));
     }
   }
   scores.sort();
   const prefix = makePrefixSums(scores);
   return computeThresholds(scores, prefix, DEFAULT_TURNS, DEFAULT_SLOTS);
+}
+
+async function buildEligibleNumbers() {
+  const eligibleNumbers = [];
+  const batchSize = 512;
+  for (let start = 0; start < DISTRIBUTION_SIZE; start += batchSize) {
+    const end = Math.min(start + batchSize, DISTRIBUTION_SIZE);
+    for (let number = start; number < end; number++) {
+      if (isUncommonNumber(number)) eligibleNumbers.push(number);
+    }
+    if (end < DISTRIBUTION_SIZE) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+  if (eligibleNumbers.length === 0) throw new Error("No Uncommon-or-higher Time Collection numbers are available");
+  return eligibleNumbers;
+}
+
+function getEligibleNumbers() {
+  if (!eligibleNumbersPromise) {
+    eligibleNumbersPromise = buildEligibleNumbers().catch((error) => {
+      eligibleNumbersPromise = null;
+      throw error;
+    });
+  }
+  return eligibleNumbersPromise;
 }
 
 function getThresholds(known) {
@@ -110,6 +142,11 @@ async function decide(input, gameConfig) {
   const { current, remainingTurns, slotsRemaining } = input;
   if (!Number.isInteger(current) || current < 0 || current > MAX_NUMBER) {
     throw new DecisionInputError(`current must be an integer between 0 and ${MAX_NUMBER}`);
+  }
+  if (!isUncommonNumber(current)) {
+    throw new DecisionInputError(
+      `current must be Uncommon or higher (official score percentile at least 50%; score threshold ${UNCOMMON_SCORE_THRESHOLD})`,
+    );
   }
   if (!Number.isInteger(remainingTurns) || remainingTurns < 1 || remainingTurns > DEFAULT_TURNS) {
     throw new DecisionInputError(`remainingTurns must be an integer between 1 and ${DEFAULT_TURNS}`);

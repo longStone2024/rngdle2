@@ -27,6 +27,8 @@ function prewarmCollection(config) {
 module.exports = {
   ...common,
   FEATURES: require("../official-engine").features,
+  isUncommonNumber: require("../official-engine").isUncommonNumber,
+  percentileForNumber: require("../official-engine").percentileForNumber,
   computeOptimalThresholds: collection.computeOptimalThresholds,
   decide,
   prewarmCollection,

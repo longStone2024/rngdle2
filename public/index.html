@@ -13,7 +13,7 @@
     <header class="topbar">
       <a class="brand" href="/">
         <span class="brand-mark">R</span>
-        <span>RNGdle <b>AI</b></span>
+        <span>{{ siteInfo.title || 'RNGdle AI' }}</span>
       </a>
       <el-navbar v-if="user" :value="activeTab" :user="user" @input="activeTab = $event" @logout="logout"></el-navbar>
       <el-button v-else type="text" @click="activeTab = 'docs'">API 文档</el-button>
@@ -24,19 +24,21 @@
         <div class="intro">
           <div class="eyebrow">PERSONAL GAME AI</div>
           <h1>把你的游戏知识，<br><span>变成 AI 策略。</span></h1>
-          <p>为三个 RNGdle 游戏定制 AI，在线体验每一次决策，并使用独立 API token 接入自己的游戏。</p>
+          <p>{{ siteInfo.description || '为三个 RNGdle 游戏定制 AI，在线体验每一次决策，并使用独立 API token 接入自己的游戏。' }}</p>
+          <el-alert v-if="siteInfo.announcement" :title="siteInfo.announcement" type="info" :closable="false" show-icon></el-alert>
           <div class="intro-points">
             <span><i class="el-icon-circle-check"></i> 不知道的高分项不参与计算</span>
             <span><i class="el-icon-circle-check"></i> 每个 token 拥有独立配置和游戏权限</span>
             <span><i class="el-icon-circle-check"></i> 游戏状态由你的客户端掌控</span>
           </div>
+          <a v-if="siteInfo.supportUrl" class="site-support-link" :href="siteInfo.supportUrl" target="_blank" rel="noopener noreferrer">联系网站支持 <i class="el-icon-top-right"></i></a>
         </div>
         <el-card class="auth-card" shadow="never">
           <div class="auth-tabs">
             <button :class="{active: authMode === 'login'}" @click="authMode = 'login'">登录</button>
             <button :class="{active: authMode === 'register'}" @click="authMode = 'register'">创建账户</button>
           </div>
-          <el-form :model="authForm" @submit.native.prevent="authenticate">
+          <el-form v-if="authMode === 'login'" :model="authForm" @submit.native.prevent="authenticate">
             <el-form-item label="用户名">
               <el-input v-model.trim="authForm.username" autocomplete="username" placeholder="3–32 位字母、数字、_ 或 -" @keyup.enter.native="authenticate"></el-input>
             </el-form-item>
@@ -44,10 +46,35 @@
               <el-input v-model="authForm.password" show-password autocomplete="current-password" placeholder="至少 10 个字符" @keyup.enter.native="authenticate"></el-input>
             </el-form-item>
             <el-button class="wide-button" type="primary" :loading="busy" @click="authenticate">
-              {{ authMode === 'login' ? '登录控制台' : '创建账户' }}
+              登录控制台
             </el-button>
           </el-form>
-          <p class="auth-note">注册后即可保存独立配置并创建 API token。</p>
+          <el-alert
+            v-else
+            title="为保护账户，注册仅支持通过下方 OAuth 提供商创建；密码注册已关闭。"
+            type="info"
+            :closable="false"
+            show-icon>
+          </el-alert>
+          <div v-if="oauthProviders.length" class="oauth-login">
+            <el-divider>{{ authMode === 'register' ? '使用 OAuth 创建账户' : '或使用 OAuth 登录' }}</el-divider>
+            <el-button
+              v-for="provider in oauthProviders"
+              :key="provider.id"
+              class="wide-button oauth-button"
+              plain
+              @click="startOAuth(provider.id, authMode)">
+              <i class="el-icon-user"></i> 使用 {{ provider.name }} {{ authMode === 'register' ? '注册' : '登录' }}
+            </el-button>
+          </div>
+          <el-alert
+            v-else
+            title="当前没有可用的 OAuth 提供商，请联系网站管理员配置。"
+            type="warning"
+            :closable="false"
+            show-icon>
+          </el-alert>
+          <p class="auth-note">{{ authMode === 'register' ? 'OAuth 注册成功后会自动登录。' : '仅现有账户可使用用户名和密码登录。' }}</p>
         </el-card>
       </section>
 
@@ -56,11 +83,13 @@
           <div>
             <div class="eyebrow">AI WORKSPACE</div>
             <h1>游戏 AI 控制台</h1>
-            <p>配置各个 API token 的 AI 认知和游戏权限，并在线体验游戏决策。</p>
+            <p>{{ siteInfo.description || '配置各个 API token 的 AI 认知和游戏权限，并在线体验游戏决策。' }}</p>
+            <el-alert v-if="siteInfo.announcement" :title="siteInfo.announcement" type="info" :closable="false" show-icon></el-alert>
+            <a v-if="siteInfo.supportUrl" class="site-support-link" :href="siteInfo.supportUrl" target="_blank" rel="noopener noreferrer">联系网站支持 <i class="el-icon-top-right"></i></a>
           </div>
           <div class="workspace-token-select" v-if="apiTokens.length && activeTab !== 'profile'">
             <label>当前 Token</label>
-            <el-select v-model="selectedTokenId" size="small" placeholder="选择 API token">
+            <el-select v-model="selectedTokenId" size="small" placeholder="选择 API token" :disabled="anyMatchActive">
               <el-option v-for="item in apiTokens" :key="item.id" :label="item.label" :value="item.id"></el-option>
             </el-select>
           </div>
@@ -68,102 +97,62 @@
 
         <el-tabs v-model="activeTab" class="workspace-tabs">
           <el-tab-pane name="play">
-            <el-alert v-if="!selectedApiToken" title="请先创建 API token，再选择要体验的游戏。" type="warning" :closable="false" show-icon>
-              <el-button type="text" @click="activeTab = 'tokens'">前往创建 Token</el-button>
-            </el-alert>
-            <el-alert v-else :title="`当前 Token：${selectedApiToken.label}。允许游戏：${selectedTokenGameLabels}`" type="info" :closable="false" show-icon></el-alert>
-            <section class="game-grid">
-              <el-card class="game-card" shadow="never">
-                <div class="game-heading">
-                  <span class="game-icon amber"><i class="el-icon-s-grid"></i></span>
-                  <div><h2>Digit Composition</h2><p>用 3 个 Key 与 5 个 Open 数字组成六位数</p></div>
-                </div>
-                <el-form label-position="top" size="small">
-                  <el-form-item label="Key 数字（3 个）">
-                    <el-input v-model="compositionKey" placeholder="例如：1, 4, 8"></el-input>
-                  </el-form-item>
-                  <el-form-item label="Open 数字（5 个）">
-                    <el-input v-model="compositionOpen" placeholder="例如：0, 2, 3, 5, 9"></el-input>
-                  </el-form-item>
-                  <div class="inline-actions">
-                    <el-button @click="randomComposition">随机生成</el-button>
-                    <el-button type="primary" :loading="busy" :disabled="!isGameAllowed('composition')" @click="runComposition">求最佳组合</el-button>
-                  </div>
-                </el-form>
-                <div v-if="results.composition" class="result-box">
-                  <div class="result-label">AI 推荐</div>
-                  <strong class="result-number">{{ results.composition.number }}</strong>
-                  <div class="result-meta">已知特征评分 {{ formatScore(results.composition.score) }} · 命中 {{ compositionMatched.length }} 项</div>
-                  <div v-if="compositionMatched.length" class="tag-row">
-                    <el-tag v-for="id in compositionMatched" :key="id" size="mini">{{ featureName(id) }}</el-tag>
-                  </div>
-                  <div v-else class="result-meta">当前配置中没有已知且命中的高分项</div>
-                </div>
-              </el-card>
-
-              <el-card class="game-card" shadow="never">
-                <div class="game-heading">
-                  <span class="game-icon blue"><i class="el-icon-time"></i></span>
-                  <div><h2>Time Collection</h2><p>限时选择数字，填满槽位前保留高价值数字</p></div>
-                </div>
-                <el-form label-position="top" size="small">
-                  <el-form-item label="当前数字（0–1,000,000）">
-                    <el-input-number v-model="collection.current" :min="0" :max="1000000" :step="137" controls-position="right"></el-input-number>
-                  </el-form-item>
-                  <div class="form-pair">
-                    <el-form-item label="剩余数字">
-                      <el-input-number v-model="collection.remainingTurns" :min="1" :max="30" controls-position="right"></el-input-number>
-                    </el-form-item>
-                    <el-form-item label="剩余槽位">
-                      <el-input-number v-model="collection.slotsRemaining" :min="0" :max="Math.min(5, collection.remainingTurns)" controls-position="right"></el-input-number>
-                    </el-form-item>
-                  </div>
-                  <div class="inline-actions">
-                    <el-button type="primary" :loading="busy" :disabled="collection.remainingTurns === 0 || !isGameAllowed('collection')" @click="runCollection">AI 判断并进入下一轮</el-button>
-                    <el-button @click="nextCollectionNumber">换一个数字</el-button>
-                    <el-button @click="resetCollection">重新开局</el-button>
-                  </div>
-                </el-form>
-                <div class="result-meta">只可收下或跳过，已收下的数字不能替换。已收集 {{ collection.selected.length }}/5 · 剩余回合 {{ collection.remainingTurns }}</div>
-                <div v-if="collection.selected.length" class="tag-row">
-                  <el-tag v-for="(pick, index) in collection.selected" :key="index" size="mini">{{ pick.number }} · {{ formatScore(pick.score) }}</el-tag>
-                </div>
-                <div v-if="results.collection" class="result-box">
-                  <div class="result-label">AI 建议</div>
-                  <strong class="result-action">{{ collectionAction(results.collection.action) }}</strong>
-                  <div class="result-meta">当前数字 {{ results.collection.current }} · 已知徽章分 {{ formatScore(results.collection.score) }} · 最优门槛 {{ formatScore(results.collection.threshold) }}</div>
-                  <div class="result-meta">命中：{{ collectionMatched.map(featureName).join("、") || "无已知计分徽章" }}</div>
-                </div>
-              </el-card>
-
-              <el-card class="game-card" shadow="never">
-                <div class="game-heading">
-                  <span class="game-icon violet"><i class="el-icon-aim"></i></span>
-                  <div><h2>Target Chase</h2><p>每轮最多改动一位，让结果尽量接近目标</p></div>
-                </div>
-                <el-form label-position="top" size="small">
-                  <div class="form-pair">
-                    <el-form-item label="当前数字">
-                      <el-input-number v-model="target.number" :min="0" :max="1000000" controls-position="right"></el-input-number>
-                    </el-form-item>
-                    <el-form-item label="目标分数（当前配置）">
-                      <el-input-number v-model="target.target" :min="0" :max="200000000" :step="1000" controls-position="right"></el-input-number>
-                    </el-form-item>
-                  </div>
-                  <div class="inline-actions">
-                    <el-button type="primary" :loading="busy" :disabled="!isGameAllowed('target')" @click="runTarget">计算最佳修改</el-button>
-                    <el-button @click="randomTarget">随机生成</el-button>
-                  </div>
-                </el-form>
-                <div v-if="results.target" class="result-box">
-                  <div class="result-label">AI 推荐</div>
-                  <strong class="result-number">{{ String(results.target.result).padStart(6, "0") }}</strong>
-                  <div class="result-meta">AI 已知分 {{ formatScore(results.target.score) }} · 距目标 {{ formatScore(results.target.distance) }} · {{ targetChange(results.target) }}</div>
-                  <div class="result-meta">命中已知计分徽章：{{ targetMatched.map(featureName).join("、") || "无" }}</div>
-                </div>
-              </el-card>
-            </section>
-            <p class="footnote"><i class="el-icon-info"></i> 体验结果仅为 AI 决策建议。游戏回合、计时、排名和分数均由客户端或你的游戏服务管理。</p>
+            <el-card class="play-setup" shadow="never">
+              <div class="config-toolbar">
+                <div><h2>完整对局 · 练习模式</h2><p>你与 AI 分别完成整场对局，逐回合展示双方决策。练习赛胜负使用徽章分数比较，不代表原游戏排位规则。</p></div>
+              </div>
+              <el-radio-group v-model="playAuthMode" size="small" :disabled="anyMatchActive">
+                <el-radio-button label="account">使用当前账户已选 Token 的配置</el-radio-button>
+                <el-radio-button label="token">使用指定 API Token</el-radio-button>
+              </el-radio-group>
+              <el-input v-if="playAuthMode === 'token'" v-model.trim="playApiToken" class="play-token-input" type="password" show-password autocomplete="off" :disabled="anyMatchActive" placeholder="粘贴允许访问所选游戏的 API Token；仅保存在当前页面内存"></el-input>
+              <el-alert v-if="playAuthMode === 'account' && !selectedApiToken" title="请先创建并选择一个 API Token，以使用其已保存配置。" type="warning" :closable="false" show-icon>
+                <el-button type="text" @click="activeTab = 'tokens'">前往创建 Token</el-button>
+              </el-alert>
+              <el-alert v-else-if="playAuthMode === 'account'" :title="`使用「${selectedApiToken.label}」已保存配置；允许游戏：${selectedTokenGameLabels}`" type="info" :closable="false" show-icon></el-alert>
+            </el-card>
+            <el-tabs v-model="playGame" type="border-card" class="game-page-tabs">
+              <el-tab-pane label="Digit Composition" name="composition">
+                <composition-game-page
+                  :match="compositionMatch"
+                  :allowed="canPlay('composition')"
+                  :can-start="!anyMatchActive"
+                  :busy="busy"
+                  :time-limit="compositionTimeLimit"
+                  :format-score="formatScore"
+                  @time-limit-change="compositionTimeLimit = $event || 120"
+                  @start="startCompositionMatch"
+                  @submit="submitCompositionRound"
+                  @abandon="abandonMatch('composition')">
+                </composition-game-page>
+              </el-tab-pane>
+              <el-tab-pane label="Time Collection" name="collection">
+                <collection-game-page
+                  :match="collectionMatch"
+                  :allowed="canPlay('collection')"
+                  :can-start="!anyMatchActive"
+                  :busy="busy"
+                  :format-score="formatScore"
+                  :collection-total="collectionTotal"
+                  @start="startCollectionMatch"
+                  @advance="advanceCollection"
+                  @abandon="abandonMatch('collection')">
+                </collection-game-page>
+              </el-tab-pane>
+              <el-tab-pane label="Target Chase" name="target">
+                <target-game-page
+                  :match="targetMatch"
+                  :allowed="canPlay('target')"
+                  :can-start="!anyMatchActive"
+                  :busy="busy"
+                  :format-score="formatScore"
+                  @start="startTargetMatch"
+                  @submit="submitTargetRound"
+                  @abandon="abandonMatch('target')">
+                </target-game-page>
+              </el-tab-pane>
+            </el-tabs>
+            <p class="footnote"><i class="el-icon-info"></i> 每个游戏使用独立 Vue 页面。Digit Composition 每场共享 120 秒（可调整），Time Collection 每步 5 秒，Target Chase 每步 10 秒；超时本场判负。Target Chase 的起始数按原版 0–1,000,000 抽取，目标分由当前 Token 配置的官方计分器生成。</p>
           </el-tab-pane>
 
           <el-tab-pane name="config">
@@ -288,7 +277,7 @@
               <div>
                 <div class="eyebrow">PERSONAL OVERVIEW</div>
                 <h2>个人使用统计</h2>
-                <p>仅当前登录账户可见。API 调用统计包含成功创建会话和成功决策的请求；游戏会话数不代表接入方已完成的整场对局。频率按 UTC 日历周期统计，此前没有记录的调用显示为 0。</p>
+                <p>仅当前登录账户可见。API 调用统计包含成功创建会话、决策和评分的请求；Target Chase 生成目标分也会调用评分 API。游戏会话数不代表接入方已完成的整场对局。频率按 UTC 日历周期统计，此前没有记录的调用显示为 0。</p>
               </div>
               <div class="profile-refresh">
                 <span v-if="statsUpdatedAt">更新于 {{ statsUpdatedAt }}</span>
@@ -316,6 +305,133 @@
                 </div>
               </el-card>
             </div>
+            <el-card class="oauth-bindings-card" shadow="never">
+              <div class="config-toolbar">
+                <div><h2>OAuth 账户绑定</h2><p>仅显式绑定到当前账户；不会根据邮箱自动合并账户。</p></div>
+              </div>
+              <div v-if="user.oauthIdentities.length" class="oauth-binding-list">
+                <div v-for="identity in user.oauthIdentities" :key="identity.providerId" class="oauth-binding-row">
+                  <span>{{ oauthProviderName(identity.providerId) }}</span>
+                  <small>绑定于 {{ formatDate(identity.linkedAt) }}</small>
+                  <el-button size="mini" type="danger" plain @click="unlinkOAuth(identity.providerId)">解除绑定</el-button>
+                </div>
+              </div>
+              <el-empty v-else description="尚未绑定 OAuth 账户"></el-empty>
+              <el-button
+                v-for="provider in oauthProviders"
+                v-if="!hasOAuthIdentity(provider.id)"
+                :key="`bind-${provider.id}`"
+                size="small"
+                @click="startOAuth(provider.id, 'bind')">
+                <i class="el-icon-link"></i> 绑定 {{ provider.name }}
+              </el-button>
+            </el-card>
+            <el-card class="oauth-bindings-card" shadow="never">
+              <div class="config-toolbar">
+                <div><h2>账户与密码</h2><p>用户名仅用于登录和展示，不支持修改。</p></div>
+              </div>
+              <el-form v-if="user.hasPassword" :model="passwordForm" label-position="top" class="password-form" @submit.native.prevent="changePassword">
+                <el-form-item label="当前用户名">
+                  <el-input :value="user.username" disabled autocomplete="username"></el-input>
+                </el-form-item>
+                <el-form-item label="当前密码">
+                  <el-input v-model="passwordForm.currentPassword" type="password" show-password autocomplete="current-password"></el-input>
+                </el-form-item>
+                <el-form-item label="新密码">
+                  <el-input v-model="passwordForm.newPassword" type="password" show-password autocomplete="new-password" minlength="10" maxlength="200" placeholder="10–200 个字符"></el-input>
+                </el-form-item>
+                <el-form-item label="确认新密码">
+                  <el-input v-model="passwordForm.confirmPassword" type="password" show-password autocomplete="new-password" minlength="10" maxlength="200"></el-input>
+                </el-form-item>
+                <el-form-item>
+                  <el-button type="primary" :loading="busy" @click="changePassword">更改密码</el-button>
+                </el-form-item>
+              </el-form>
+              <el-alert
+                v-else
+                title="此 OAuth 账户没有密码登录方式，因此无需更改密码；请通过已绑定的 OAuth 提供商登录。"
+                type="info"
+                :closable="false"
+                show-icon>
+              </el-alert>
+            </el-card>
+          </el-tab-pane>
+
+          <el-tab-pane v-if="user.role === 'admin'" name="admin">
+            <section class="profile-heading">
+              <div><div class="eyebrow">ADMINISTRATION</div><h2>网站管理</h2><p>管理账户、通用 OAuth 提供商和公开网站信息。OAuth Client Secret 仅加密保存，API 不会返回明文。</p></div>
+              <el-button size="small" icon="el-icon-refresh" @click="loadAdminPanel">刷新</el-button>
+            </section>
+            <div class="stats-grid admin-overview-grid">
+              <el-card v-for="item in adminOverviewCards" :key="item.label" class="stats-card" shadow="never">
+                <div class="admin-overview-label">{{ item.label }}</div><strong>{{ item.value || 0 }}</strong>
+              </el-card>
+            </div>
+            <el-card class="admin-card" shadow="never">
+              <h3>用户管理</h3>
+              <el-table :data="adminUsers" stripe>
+                <el-table-column prop="username" label="用户名" min-width="130"></el-table-column>
+                <el-table-column label="角色" width="130">
+                  <template slot-scope="scope">
+                    <el-select :value="scope.row.role" size="mini" :disabled="scope.row.isRoot" @change="updateAdminUser(scope.row, { role: $event })">
+                      <el-option label="普通用户" value="user"></el-option><el-option label="管理员" value="admin"></el-option>
+                    </el-select>
+                    <el-tag v-if="scope.row.isRoot" size="mini" type="danger">ROOT</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="105">
+                  <template slot-scope="scope">
+                    <el-tag :type="scope.row.disabled ? 'danger' : 'success'" size="mini">{{ scope.row.disabled ? '停用' : '正常' }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="tokenCount" label="Token" width="75"></el-table-column>
+                <el-table-column label="OAuth 绑定" min-width="150">
+                  <template slot-scope="scope">{{ scope.row.oauthIdentities.join(', ') || '—' }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="190">
+                  <template slot-scope="scope">
+                    <el-button size="mini" :disabled="scope.row.isRoot || scope.row.username === user.username" @click="updateAdminUser(scope.row, { disabled: !scope.row.disabled })">{{ scope.row.disabled ? '启用' : '停用' }}</el-button>
+                    <el-button size="mini" type="danger" plain :disabled="scope.row.isRoot || scope.row.username === user.username" @click="deleteAdminUser(scope.row)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-card>
+            <el-card class="admin-card" shadow="never">
+              <div class="config-toolbar"><div><h3>OAuth 提供商</h3><p>支持 OAuth 2.0 用户信息端点，或使用 HS256 的 OpenID Connect ID token；授权回调为 <code>/api/auth/oauth/{id}/callback</code>。</p></div><el-button size="small" @click="resetProviderForm">新增提供商</el-button></div>
+              <el-table :data="adminProviders" size="small" stripe>
+                <el-table-column prop="id" label="ID" width="120"></el-table-column>
+                <el-table-column prop="name" label="名称" min-width="130"></el-table-column>
+                <el-table-column label="状态" width="100"><template slot-scope="scope">{{ scope.row.enabled ? '启用' : '停用' }}</template></el-table-column>
+                <el-table-column label="Client Secret" width="130"><template slot-scope="scope">{{ scope.row.hasClientSecret ? '已加密保存' : '未设置' }}</template></el-table-column>
+                <el-table-column label="操作" width="150"><template slot-scope="scope"><el-button size="mini" @click="editProvider(scope.row)">编辑</el-button><el-button size="mini" type="danger" plain @click="deleteProvider(scope.row)">删除</el-button></template></el-table-column>
+              </el-table>
+              <el-form :model="adminProviderForm" label-position="top" class="admin-provider-form">
+                <el-form-item label="提供商 ID"><el-input v-model.trim="adminProviderForm.id" :disabled="Boolean(editingProviderId)" placeholder="例如：company-sso"></el-input></el-form-item>
+                <el-form-item label="显示名称"><el-input v-model.trim="adminProviderForm.name"></el-input></el-form-item>
+                <el-form-item label="Client ID"><el-input v-model.trim="adminProviderForm.clientId" autocomplete="off"></el-input></el-form-item>
+                <el-form-item label="Client Secret"><el-input v-model="adminProviderForm.clientSecret" type="password" show-password autocomplete="new-password" :placeholder="editingProviderId ? '留空以保留原密钥' : '输入 OAuth Client Secret'"></el-input></el-form-item>
+                <el-form-item label="授权地址"><el-input v-model.trim="adminProviderForm.authorizationUrl" placeholder="https://provider.example/oauth/authorize"></el-input></el-form-item>
+                <el-form-item label="令牌地址"><el-input v-model.trim="adminProviderForm.tokenUrl" placeholder="https://provider.example/oauth/token"></el-input></el-form-item>
+                <el-form-item label="OpenID Connect Issuer（可选）"><el-input v-model.trim="adminProviderForm.issuer" placeholder="例如：https://codeforces.com"></el-input></el-form-item>
+                <el-form-item label="用户信息地址（OIDC 可留空）"><el-input v-model.trim="adminProviderForm.userInfoUrl" placeholder="非 OIDC 提供商需要填写"></el-input></el-form-item>
+                <el-form-item label="Scopes"><el-input v-model.trim="adminProviderForm.scopes"></el-input></el-form-item>
+                <el-form-item label="唯一身份字段"><el-input v-model.trim="adminProviderForm.subjectField" placeholder="sub"></el-input></el-form-item>
+                <el-form-item label="PKCE"><el-switch v-model="adminProviderForm.pkceEnabled" active-text="启用 PKCE"></el-switch></el-form-item>
+                <el-form-item label="状态"><el-switch v-model="adminProviderForm.enabled" active-text="启用"></el-switch></el-form-item>
+              </el-form>
+              <p class="form-hint">OIDC 配置需填写 Issuer 并在 Scopes 中包含 openid；仅当提供商支持时启用 PKCE。Issuer 会按 ID token 中的值精确匹配。</p>
+              <el-button type="primary" :loading="busy" @click="saveProvider">{{ editingProviderId ? '保存提供商' : '添加提供商' }}</el-button>
+            </el-card>
+            <el-card class="admin-card" shadow="never">
+              <h3>网站信息</h3>
+              <el-form :model="adminSiteInfo" label-position="top" class="admin-site-form">
+                <el-form-item label="网站名称"><el-input v-model.trim="adminSiteInfo.title" maxlength="100"></el-input></el-form-item>
+                <el-form-item label="简介"><el-input v-model="adminSiteInfo.description" type="textarea" maxlength="500"></el-input></el-form-item>
+                <el-form-item label="公告"><el-input v-model="adminSiteInfo.announcement" type="textarea" maxlength="1000"></el-input></el-form-item>
+                <el-form-item label="支持链接（HTTPS）"><el-input v-model.trim="adminSiteInfo.supportUrl"></el-input></el-form-item>
+              </el-form>
+              <el-button type="primary" @click="saveSiteInfo">保存网站信息</el-button>
+            </el-card>
           </el-tab-pane>
 
           <el-tab-pane name="docs">
@@ -332,6 +448,131 @@
     <footer class="footer">RNGdle AI · AI 提供建议，游戏状态由接入方管理。</footer>
   </div>
 
+  <script type="text/x-template" id="composition-game-page">
+    <el-card class="game-card game-page-card" shadow="never">
+      <div class="game-heading">
+        <span class="game-icon amber"><i class="el-icon-s-grid"></i></span>
+        <div><h2>Digit Composition</h2><p>同时完成 4 道题；每题的 Key/Open 数字与 AI 相同</p></div>
+      </div>
+      <div v-if="!match.started || match.finished" class="composition-time-setting">
+        <span>整场决策限时</span>
+        <el-input-number :value="timeLimit" :min="15" :max="600" :step="15" size="small" @change="$emit('time-limit-change', $event)"></el-input-number>
+        <span>秒（四回合共享）</span>
+      </div>
+      <div v-if="!match.started || match.finished" class="inline-actions">
+        <el-button type="primary" :loading="busy" :disabled="!allowed || !canStart || busy" @click="$emit('start')">开始新对局</el-button>
+      </div>
+      <template v-if="match.started">
+        <el-alert :title="match.finished ? match.winnerText : '请在倒计时结束前填写全部 4 题并一次性提交'" :type="match.timedOut ? 'error' : match.finished ? 'success' : 'info'" :closable="false"></el-alert>
+        <div v-if="!match.finished">
+          <div class="decision-timer" :class="{ urgent: match.remainingSeconds <= 15 }"><i class="el-icon-timer"></i><span>全局剩余时间</span><strong>{{ match.remainingSeconds }}s</strong></div>
+          <div class="composition-rounds">
+            <section v-for="(round, index) in match.rounds" :key="index" class="composition-round">
+              <div class="composition-round-heading">
+                <b>第 {{ index + 1 }} 题</b>
+                <span><b>Key</b> {{ round.key.join(" · ") }}</span>
+                <span><b>Open</b> {{ round.open.join(" · ") }}</span>
+              </div>
+              <el-form label-position="top" size="small">
+                <el-form-item label="六位数（第 2、5 位必须使用 Key）">
+                  <el-input v-model.trim="round.playerNumber" maxlength="6" placeholder="例如：184205"></el-input>
+                </el-form-item>
+              </el-form>
+            </section>
+          </div>
+          <div class="inline-actions">
+            <el-button type="primary" :loading="busy" :disabled="busy || !allowed" @click="$emit('submit')">同时提交 4 题并查询 AI</el-button>
+            <el-button size="mini" :disabled="busy" @click="$emit('abandon')">放弃对局</el-button>
+          </div>
+        </div>
+        <div class="match-score">练习回合分：你 {{ match.playerPoints }} · AI {{ match.aiPoints }}</div>
+        <el-table v-if="match.history.length" :data="match.history" size="mini" class="match-history">
+          <el-table-column prop="round" label="回合" width="56"></el-table-column>
+          <el-table-column prop="playerNumber" label="你的数字"></el-table-column>
+          <el-table-column prop="playerScore" label="你的分数" width="100"></el-table-column>
+          <el-table-column prop="aiNumber" label="AI 数字"></el-table-column>
+          <el-table-column prop="aiScore" label="AI 分数" width="100"></el-table-column>
+          <el-table-column prop="roundResult" label="结果" width="76"></el-table-column>
+        </el-table>
+      </template>
+    </el-card>
+  </script>
+
+  <script type="text/x-template" id="collection-game-page">
+    <el-card class="game-card game-page-card" shadow="never">
+      <div class="game-heading">
+        <span class="game-icon blue"><i class="el-icon-time"></i></span>
+        <div><h2>Time Collection</h2><p>30 个数字中各自收集最多 5 个；已收集数字不能替换</p></div>
+      </div>
+      <div v-if="!match.started || match.finished" class="inline-actions">
+        <el-button type="primary" :loading="busy" :disabled="!allowed || !canStart || busy" @click="$emit('start')">开始新对局</el-button>
+      </div>
+      <template v-if="match.started">
+        <el-alert :title="match.finished ? match.winnerText : `第 ${match.turn + 1} / 30 个数字 · 剩余槽位：你 ${Math.max(0, 5 - match.playerPicks.length)}，AI ${Math.max(0, 5 - match.aiPicks.length)}`" :type="match.timedOut ? 'error' : match.finished ? 'success' : 'info'" :closable="false"></el-alert>
+        <div v-if="!match.finished">
+          <div class="decision-timer" :class="{ urgent: match.remainingSeconds <= 2 }"><i class="el-icon-timer"></i><span>本步剩余时间</span><strong>{{ match.remainingSeconds }}s</strong></div>
+          <div class="current-number"><span>当前数字 · Uncommon+（官方百分位 {{ Number(match.currentPercentile).toFixed(1) }}%）</span><strong>{{ match.current }}</strong></div>
+          <div class="inline-actions">
+            <el-button type="primary" :loading="busy" :disabled="busy || !allowed || match.playerPicks.length >= 5" @click="$emit('advance', 'take')">{{ 5 - match.playerPicks.length >= 30 - match.turn ? '必须收下' : '收下' }}</el-button>
+            <el-button :loading="busy" :disabled="busy || !allowed || 5 - match.playerPicks.length >= 30 - match.turn" @click="$emit('advance', 'skip')">{{ match.playerPicks.length >= 5 ? '已满，继续' : '跳过' }}</el-button>
+            <el-button size="mini" :disabled="busy" @click="$emit('abandon')">放弃对局</el-button>
+          </div>
+        </div>
+        <div class="result-meta">你已收集 {{ match.playerPicks.length }} 个 · AI 已收集 {{ match.aiPicks.length }} 个</div>
+        <div class="match-score">当前总徽章分：你 {{ formatScore(collectionTotal(match.playerPicks)) }} · AI {{ formatScore(collectionTotal(match.aiPicks)) }}</div>
+        <el-table v-if="match.history.length" :data="match.history" size="mini" class="match-history">
+          <el-table-column prop="turn" label="轮" width="48"></el-table-column>
+          <el-table-column prop="number" label="数字"></el-table-column>
+          <el-table-column prop="percentile" label="百分位" width="100"></el-table-column>
+          <el-table-column prop="playerAction" label="你"></el-table-column>
+          <el-table-column prop="aiAction" label="AI"></el-table-column>
+          <el-table-column prop="aiScore" label="AI 分数" width="90"></el-table-column>
+        </el-table>
+      </template>
+    </el-card>
+  </script>
+
+  <script type="text/x-template" id="target-game-page">
+    <el-card class="game-card game-page-card" shadow="never">
+      <div class="game-heading">
+        <span class="game-icon violet"><i class="el-icon-aim"></i></span>
+        <div><h2>Target Chase</h2><p>10 回合；每回合修改一个数字位，使计分接近目标</p></div>
+      </div>
+      <div v-if="!match.started || match.finished" class="inline-actions">
+        <el-button type="primary" :loading="busy" :disabled="!allowed || !canStart || busy" @click="$emit('start')">开始新对局</el-button>
+      </div>
+      <template v-if="match.started">
+        <el-alert :title="match.finished ? match.winnerText : `第 ${match.round + 1} / 10 回合`" :type="match.timedOut ? 'error' : match.finished ? 'success' : 'info'" :closable="false"></el-alert>
+        <template v-if="!match.finished">
+          <div class="decision-timer" :class="{ urgent: match.remainingSeconds <= 3 }"><i class="el-icon-timer"></i><span>本步剩余时间</span><strong>{{ match.remainingSeconds }}s</strong></div>
+          <div class="target-round">
+            <div><span>当前数字</span><strong>{{ match.number }}</strong></div>
+            <div><span>目标徽章分</span><strong>{{ formatScore(match.target) }}</strong></div>
+          </div>
+          <el-form label-position="top" size="small">
+            <el-form-item label="你的结果（范围 0–1,000,000；位数不变，恰好修改一位）">
+              <el-input v-model.trim="match.playerResult" maxlength="7" placeholder="输入修改后数字"></el-input>
+            </el-form-item>
+          </el-form>
+          <div class="inline-actions">
+            <el-button type="primary" :loading="busy" :disabled="busy || !allowed" @click="$emit('submit')">提交本回合</el-button>
+            <el-button size="mini" :disabled="busy" @click="$emit('abandon')">放弃对局</el-button>
+          </div>
+        </template>
+        <div class="match-score">练习回合分：你 {{ match.playerPoints }} · AI {{ match.aiPoints }}</div>
+        <el-table v-if="match.history.length" :data="match.history" size="mini" class="match-history">
+          <el-table-column prop="round" label="回合" width="56"></el-table-column>
+          <el-table-column prop="number" label="起始数"></el-table-column>
+          <el-table-column prop="target" label="目标分"></el-table-column>
+          <el-table-column prop="playerResult" label="你"></el-table-column>
+          <el-table-column prop="playerDistance" label="差值"></el-table-column>
+          <el-table-column prop="aiResult" label="AI"></el-table-column>
+          <el-table-column prop="aiDistance" label="差值"></el-table-column>
+        </el-table>
+      </template>
+    </el-card>
+  </script>
+
   <script type="text/x-template" id="api-documentation-template">
     <section class="docs">
       <div class="docs-heading">
@@ -339,12 +580,30 @@
         <el-button v-if="!authenticated" @click="$emit('back')">返回登录</el-button>
       </div>
       <el-alert title="AI 只返回当前题目的建议；对局状态、回合、计时、排名和结算由调用方维护。API token 绑定独立 AI 配置和允许访问的游戏。" type="info" :closable="false" show-icon></el-alert>
-      <p>所有 API 使用 JSON。注册和登录获得的网站会话用于管理 token；调用游戏 API 时请使用个人 API token。Token 原文只在创建或轮换时返回；需要重新查看时可轮换生成，旧值会立即失效。</p>
+      <p>所有 API 使用 JSON。账户注册仅支持 OAuth（密码注册已禁用）；已有密码账户仍可密码登录。网站会话用于管理 token；调用游戏 API 时请使用个人 API token。Token 原文只在创建或轮换时返回；需要重新查看时可轮换生成，旧值会立即失效。</p>
       <h3>认证与 Token 管理</h3>
       <pre><code>Authorization: Bearer &lt;your-token&gt;
 Content-Type: application/json</code></pre>
-      <div class="endpoint">POST /api/auth/register · POST /api/auth/login</div>
+      <div class="endpoint">POST /api/auth/login</div>
       <pre><code>{ "username": "player_01", "password": "至少 10 个字符" }</code></pre>
+      <div class="endpoint">GET /api/auth/oauth/providers · GET /api/auth/oauth/{provider_id}/start?flow=login</div>
+      <div class="endpoint">GET /api/auth/oauth/{provider_id}/start?flow=register</div>
+      <p>仅 OAuth 可注册，密码注册接口 <code>POST /api/auth/register</code> 已禁用。OAuth 登录只允许已注册身份，注册时使用 <code>flow=register</code>；网站使用一次性 state，并按提供商设置启用或关闭 PKCE。支持基于 HS256 ID token 的 OIDC 登录。账户通过提供商 subject 识别，不会按邮箱自动关联；注册成功后会自动登录。</p>
+      <div class="endpoint">GET /api/auth/oauth/{provider_id}/start?flow=bind · GET /api/auth/oauth/{provider_id}/callback</div>
+      <p>绑定流程需先带网站会话访问 start 地址；OAuth 回调由浏览器访问。回调 URI 为 <code>{PUBLIC_BASE_URL}/api/auth/oauth/{provider_id}/callback</code>。</p>
+      <div class="endpoint">DELETE /api/me/oauth/{provider_id}</div>
+      <p>解除当前账户的 OAuth 绑定。没有密码的账户不能移除最后一个可用 OAuth 登录方式。</p>
+      <div class="endpoint">PUT /api/me/password</div>
+      <pre><code>{ "currentPassword": "当前密码", "newPassword": "新的 10–200 位密码" }</code></pre>
+      <p>仅网站登录会话可修改自己的密码；修改时当前密码必填，其他已有登录会话会被注销，当前会话保留。用户名不能修改。纯 OAuth 账户没有密码登录方式，不能调用此接口。</p>
+      <h3>管理员 API</h3>
+      <p>以下端点仅接受 root/管理员的网站登录会话，不接受个人 API Token：</p>
+      <div class="endpoint">GET /api/admin/overview · GET /api/admin/users</div>
+      <div class="endpoint">PATCH /api/admin/users/{username} · DELETE /api/admin/users/{username}</div>
+      <pre><code>{ "role": "admin", "disabled": false }</code></pre>
+      <div class="endpoint">GET/POST /api/admin/oauth/providers · PUT/DELETE /api/admin/oauth/providers/{provider_id}</div>
+      <div class="endpoint">GET/PUT /api/admin/site-info</div>
+      <p>OAuth Client Secret 由服务器使用 <code>OAUTH_ENCRYPTION_KEY</code> 以 AES-GCM 加密持久化；管理 API 不返回明文。</p>
       <div class="endpoint">POST /api/auth/tokens</div>
       <pre><code>{ "label": "我的游戏客户端", "allowedGames": ["target", "collection"] }</code></pre>
       <p>可用游戏为 <code>composition</code>、<code>collection</code>、<code>target</code>；至少指定一款。每个 token 的配置和允许游戏范围相互隔离。</p>
@@ -357,7 +616,7 @@ Content-Type: application/json</code></pre>
       <div class="endpoint">GET /api/me</div>
       <p>网站会话返回当前账户的 token 元数据、允许游戏和配置；API token 只返回自身信息。不会返回 token 原文。</p>
       <div class="endpoint">GET /api/me/stats</div>
-      <p>仅网站登录会话可访问，返回当前账户按游戏和总计的成功游戏 API 调用、决策、API 游戏会话、当前 Token 数，以及 UTC 小时/日/月/年调用数。部署统计功能前没有历史记录的数据按 0 返回；游戏 API 调用统计包括成功创建会话与成功决策的请求。</p>
+      <p>仅网站登录会话可访问，返回当前账户按游戏和总计的成功游戏 API 调用、决策、API 游戏会话、当前 Token 数，以及 UTC 小时/日/月/年调用数。部署统计功能前没有历史记录的数据按 0 返回；调用统计包含成功创建会话、决策、评分和 Time Collection 数字生成请求。</p>
       <div class="endpoint">PUT /api/auth/tokens/{token_id}/config</div>
       <p>仅网站会话可管理 token 配置。请求体是配置对象，或 <code>{"config":{...}}</code>。未指定的徽章默认已知；<code>known:false</code> 会从该 token 的计分与决策中排除徽章。</p>
       <pre><code>{
@@ -379,11 +638,17 @@ Content-Type: application/json</code></pre>
       <pre><code>{ "game": "target" }</code></pre>
       <p>使用 API token 时，服务自动绑定当前 token；使用网站会话体验时还需传入 <code>tokenId</code>。未授权游戏返回 403，已有游戏会话始终绑定到创建它的 token。</p>
       <div class="endpoint">POST /api/games/{game_id}/decide</div>
+      <div class="endpoint">POST /api/games/{game_id}/score</div>
+      <pre><code>{ "number": 123456 }</code></pre>
+      <p>使用该游戏会话所绑定 Token 的认知配置，为玩家提交的数字计算官方徽章分；数字需为 0–1,000,000 的整数。仅会话所属 Token 或同一账户的网站登录会话可访问。</p>
+      <div class="endpoint">POST /api/games/{game_id}/collection-number</div>
+      <pre><code>{ "number": 123456, "score": 12345, "percentile": 62.5 }</code></pre>
+      <p>仅适用于 Time Collection；均匀抽取 0–1,000,000 范围内官方全量计分百分位达到 50%（Top 50%）的数字。该条件与 Token 的 AI 已知徽章配置无关。Time Collection 的 <code>decide</code> 也会拒绝不符合此条件的输入。</p>
       <table class="docs-table">
         <thead><tr><th>游戏</th><th>请求 JSON</th><th>决策行为</th></tr></thead>
         <tbody>
-          <tr><td>Digit Composition<br><code>composition</code></td><td><code>{"key":[1,4,8],"open":[0,2,3,5,9]}</code></td><td>遍历合法组合，生成最佳六位数。Key 仅放在第 2、5 位，每枚数字最多用一次。</td></tr>
-          <tr><td>Time Collection<br><code>collection</code></td><td><code>{"current":746281,"remainingTurns":10,"slotsRemaining":3}</code></td><td>仅返回 <code>take</code> 或 <code>skip</code>；依据该 token 已知徽章的精确分数分布和剩余回合/槽位优化期望总分。</td></tr>
+          <tr><td>Digit Composition<br><code>composition</code></td><td><code>{"key":[1,4,8],"open":[0,2,3,5,9]}</code></td><td>遍历合法组合，生成最佳六位数字串（首位允许为 0）。Key 仅放在第 2、5 位，每枚数字最多用一次；响应同时提供可保留前导零的 <code>digits</code> 与数值型 <code>number</code>。</td></tr>
+          <tr><td>Time Collection<br><code>collection</code></td><td><code>{"current":314159,"remainingTurns":10,"slotsRemaining":3}</code></td><td>当前数字必须属于官方全量计分百分位 ≥ 50% 的 Uncommon 或更高范围；仅返回 <code>take</code> 或 <code>skip</code>，并根据符合该条件的候选分布、该 token 已知徽章和剩余回合/槽位计算最优门槛。</td></tr>
           <tr><td>Target Chase<br><code>target</code></td><td><code>{"number":314159,"target":25007367}</code></td><td>只修改一个数字位，选择按该 token 配置计分后与目标分数差距最小的合法结果。</td></tr>
         </tbody>
       </table>

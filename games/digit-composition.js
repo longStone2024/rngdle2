@@ -29,6 +29,7 @@ function decide(input, gameConfig) {
             score: scoring.score,
             matched: scoring.matched,
             scoringBadges: scoring.scoringBadges,
+            digits: positions.map((item) => String(item.digit)).join(""),
             arrangement: positions.map((item) => item.tag),
           };
           if (!best || candidate.score > best.score

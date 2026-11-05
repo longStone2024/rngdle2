@@ -4,11 +4,11 @@
   "private": true,
   "description": "Configurable AI for Digit Composition, Time Collection, and Target Chase",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.9"
   },
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
+    "start": "node --env-file-if-exists=.env server.js",
+    "dev": "node --env-file-if-exists=.env --watch server.js",
     "test": "node --test"
   }
 }

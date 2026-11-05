@@ -775,6 +775,7 @@
                         open: round.open,
                         best: {
                             number: decision.number,
+                            digits: decision.digits,
                             ep: decision.score,
                             arrangement: decision.arrangement,
                             matched: decision.matched,
@@ -2360,7 +2361,7 @@
             const info = document.createElement('div');
             info.className = 'compose-info';
             if (r.best) {
-                info.innerHTML = `<span>数字 <b>${r.best.number}</b></span>
+                info.innerHTML = `<span>数字 <b>${r.best.digits || String(r.best.number).padStart(6, '0')}</b></span>
           <span>AI 分数 <b>${r.best.ep}</b></span>`;
             } else {
                 info.textContent = composeSolveBusy ? '网站 AI 决策中…' : '等待 AI 决策';

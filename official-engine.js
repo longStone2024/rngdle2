@@ -177,10 +177,35 @@ function createKnownBadgeScorer(knownBadgeIds) {
   return compileEntryScorer(knownEntries);
 }
 
+const scoreAllBadges = createKnownBadgeScorer(features.map(({ id }) => id));
+const maxPossibleScore = features.reduce((total, feature) => total + feature.score, 0);
+let lowScore = 0;
+let highScore = maxPossibleScore;
+while (lowScore < highScore) {
+  const middle = Math.floor((lowScore + highScore) / 2);
+  if (percentileForScore(middle) >= 50) highScore = middle;
+  else lowScore = middle + 1;
+}
+const UNCOMMON_SCORE_THRESHOLD = lowScore;
+
+function isUncommonNumber(number) {
+  return Number.isInteger(number)
+    && number >= 0
+    && number <= 1_000_000
+    && scoreAllBadges(number) >= UNCOMMON_SCORE_THRESHOLD;
+}
+
+function percentileForNumber(number) {
+  return percentileForScore(scoreAllBadges(number));
+}
+
 module.exports = {
+  UNCOMMON_SCORE_THRESHOLD,
   features,
   analyzeNumber,
+  isUncommonNumber,
   percentileForScore,
+  percentileForNumber,
   scoreKnownBadges,
   createKnownBadgeScorer,
   scoredBadgesById,
