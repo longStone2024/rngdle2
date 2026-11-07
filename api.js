@@ -453,6 +453,59 @@ function createApiHandler(userService) {
       return;
     }
 
+    const tokenConfigGroupMatch = /^\/api\/auth\/tokens\/([^/]+)\/config-groups\/([^/]+)$/.exec(pathname);
+    if (tokenConfigGroupMatch && ["POST", "PUT"].includes(method)) {
+      if (auth.kind !== "session") {
+        throw new UserError(403, "请使用网站登录会话管理 token 配置组");
+      }
+      const tokenId = decodeURIComponent(tokenConfigGroupMatch[1]);
+      const game = decodeURIComponent(tokenConfigGroupMatch[2]);
+      const body = await parseBody(req);
+      if (method === "POST") {
+        const group = await userService.createApiTokenConfigGroup(
+          user,
+          tokenId,
+          game,
+          body.name,
+          body.config,
+        );
+        const { token } = userService.findApiToken(user, tokenId);
+        if (game === "collection" && token.allowedGames.includes(game)) {
+          scheduleCollectionWarmup(token.config, "Time Collection configuration group creation");
+        }
+        jsonResponse(res, 201, {
+          group,
+          configGroupIds: { ...token.configGroupIds },
+          config: token.config,
+        });
+        return;
+      }
+      const result = await userService.assignApiTokenConfigGroup(user, tokenId, game, body.groupId);
+      const { token } = userService.findApiToken(user, tokenId);
+      if (game === "collection" && token.allowedGames.includes(game)) {
+        scheduleCollectionWarmup(result.config, "Time Collection configuration group selection");
+      }
+      jsonResponse(res, 200, result);
+      return;
+    }
+
+    const configGroupMatch = /^\/api\/auth\/config-groups\/([^/]+)$/.exec(pathname);
+    if (method === "PUT" && configGroupMatch) {
+      if (auth.kind !== "session") {
+        throw new UserError(403, "请使用网站登录会话修改配置组");
+      }
+      const groupId = decodeURIComponent(configGroupMatch[1]);
+      const group = await userService.updateConfigGroup(user, groupId, await parseBody(req));
+      for (const token of Object.values(user.apiTokens)) {
+        if (token.configGroupIds?.collection === group.id
+            && token.allowedGames.includes("collection")) {
+          scheduleCollectionWarmup(token.config, "Time Collection configuration group update");
+        }
+      }
+      jsonResponse(res, 200, { group });
+      return;
+    }
+
     const tokenGamesMatch = /^\/api\/auth\/tokens\/([^/]+)\/games$/.exec(pathname);
     if (method === "PUT" && tokenGamesMatch) {
       if (auth.kind !== "session") {
@@ -556,7 +609,10 @@ function createApiHandler(userService) {
       do {
         number = crypto.randomInt(0, 1_000_001);
       } while (!isUncommonNumber(number));
-      const scoring = scoreNumber(number, token.config.games.collection);
+      const scoring = scoreNumber(
+        number,
+        userService.getTokenConfig(user, token).games.collection,
+      );
       userService.recordApiUsage(user, game.game, "score");
       await userService.persist();
       jsonResponse(res, 200, {
@@ -586,7 +642,8 @@ function createApiHandler(userService) {
       if (!Number.isInteger(body.number) || body.number < 0 || body.number > 1_000_000) {
         throw new UserError(400, "number 必须是 0–1,000,000 范围内的整数");
       }
-      const scoring = scoreNumber(body.number, token.config.games[game.game]);
+      const config = userService.getTokenConfig(user, token);
+      const scoring = scoreNumber(body.number, config.games[game.game]);
       userService.recordApiUsage(user, game.game, "score");
       await userService.persist();
       jsonResponse(res, 200, { game_id: scoreMatch[1], number: body.number, ...scoring });
@@ -607,7 +664,7 @@ function createApiHandler(userService) {
       }
       const body = await parseBody(req);
       try {
-        const decision = await decide(game.game, body, token.config);
+        const decision = await decide(game.game, body, userService.getTokenConfig(user, token));
         userService.recordApiUsage(user, game.game, "decision");
         await userService.persist();
         jsonResponse(res, 200, { game_id: decisionMatch[1], decision });

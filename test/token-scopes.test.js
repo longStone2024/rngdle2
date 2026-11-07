@@ -9,7 +9,7 @@ const crypto = require("node:crypto");
 const { Readable } = require("node:stream");
 const { createApiHandler } = require("../api");
 const { createUserService } = require("../users");
-const { defaultConfig, FEATURES, isUncommonNumber } = require("../games");
+const { defaultConfig, FEATURES, isUncommonNumber, scoreNumber } = require("../games");
 
 function findCommonNumber() {
   for (let number = 0; number <= 1_000_000; number++) {
@@ -96,6 +96,38 @@ test("Time Collection only generates and accepts Uncommon-or-higher numbers", as
     { current: generated.body.number, remainingTurns: 10, slotsRemaining: 3 },
   );
   assert.equal(allowedNumber.status, 200);
+});
+
+test("Digit Climb API returns five solutions and validates a submitted answer's budget", async (t) => {
+  const { api, users, user } = await createFixture(t);
+  const climbToken = await users.createApiToken(user, "climb-only", ["climb"]);
+  const game = await request(api, "POST", "/api/games", climbToken.token, { game: "climb" });
+  const result = await request(
+    api,
+    "POST",
+    `/api/games/${game.body.game_id}/decide`,
+    climbToken.token,
+    { number: 314159, budget: 3, answer: 314169 },
+  );
+  assert.equal(result.status, 200);
+  assert.equal(result.body.decision.solutions.length, 5);
+  assert.equal(result.body.decision.answer.cost, 1);
+  const shortStartResult = await request(
+    api,
+    "POST",
+    `/api/games/${game.body.game_id}/decide`,
+    climbToken.token,
+    { number: 60451, budget: 3, answer: 60451 },
+  );
+  assert.equal(shortStartResult.body.decision.answer.cost, 0);
+  const invalidAnswer = await request(
+    api,
+    "POST",
+    `/api/games/${game.body.game_id}/decide`,
+    climbToken.token,
+    { number: 314159, budget: 3, answer: 999999 },
+  ).then((value) => value, (error) => ({ status: error.status }));
+  assert.equal(invalidAnswer.status, 400);
 });
 
 test("personal usage statistics default to zero and count per-game API usage", async (t) => {
@@ -214,6 +246,7 @@ test("API token settings and allowed games are isolated per token", async (t) =>
   assert.equal(score.body.score, 0);
   const apiProfile = await request(api, "GET", "/api/me", compositionToken.token);
   assert.deepEqual(apiProfile.body.apiTokens.map(({ id }) => id), [compositionToken.id]);
+  assert.equal(apiProfile.body.configGroups.length, 4);
 
   const forbidden = await request(
     api,
@@ -288,6 +321,95 @@ test("API token settings and allowed games are isolated per token", async (t) =>
 
   const compositionHash = crypto.createHash("sha256").update(compositionToken.token).digest("hex");
   assert.equal(user.apiTokens[compositionHash].config.games.composition.knowledge.PRIME.known, false);
+});
+
+test("API tokens receive per-game groups and can reuse one group across tokens and modes", async (t) => {
+  const { api, sessionToken, compositionToken, targetToken } = await createFixture(t);
+  const initialProfile = await request(api, "GET", "/api/me", sessionToken);
+  assert.equal(initialProfile.body.configGroups.length, 8);
+  const compositionApi = initialProfile.body.apiTokens.find(({ id }) => id === compositionToken.id);
+  const targetApi = initialProfile.body.apiTokens.find(({ id }) => id === targetToken.id);
+  assert.deepEqual(Object.keys(compositionApi.configGroupIds).sort(), ["climb", "collection", "composition", "target"]);
+  assert.equal(new Set(Object.values(compositionApi.configGroupIds)).size, 4);
+
+  const compositionGroupId = compositionApi.configGroupIds.composition;
+  const updateGroup = await request(
+    api,
+    "PUT",
+    `/api/auth/config-groups/${compositionGroupId}`,
+    sessionToken,
+    { config: { knowledge: { PRIME: { known: false } } } },
+  );
+  assert.equal(updateGroup.body.group.config.knowledge.PRIME.known, false);
+
+  const crossModeSelection = await request(
+    api,
+    "PUT",
+    `/api/auth/tokens/${targetToken.id}/config-groups/target`,
+    sessionToken,
+    { groupId: compositionGroupId },
+  );
+  assert.equal(crossModeSelection.status, 200);
+  const secondModeSelection = await request(
+    api,
+    "PUT",
+    `/api/auth/tokens/${compositionToken.id}/config-groups/target`,
+    sessionToken,
+    { groupId: compositionGroupId },
+  );
+  assert.equal(secondModeSelection.status, 200);
+  const profile = await request(api, "GET", "/api/me", sessionToken);
+  const updatedCompositionApi = profile.body.apiTokens.find(({ id }) => id === compositionToken.id);
+  const updatedTargetApi = profile.body.apiTokens.find(({ id }) => id === targetToken.id);
+  assert.equal(updatedCompositionApi.config.games.composition.knowledge.PRIME.known, false);
+  assert.equal(updatedTargetApi.config.games.target.knowledge.PRIME.known, false);
+  assert.equal(updatedTargetApi.config.games.composition.knowledge.PRIME.known, true);
+  assert.equal(
+    updatedTargetApi.configGroupIds.target,
+    updatedCompositionApi.configGroupIds.target,
+  );
+  assert.equal(
+    updatedCompositionApi.configGroupIds.composition,
+    updatedCompositionApi.configGroupIds.target,
+  );
+  const conflictingLegacyConfig = defaultConfig();
+  conflictingLegacyConfig.games.target.knowledge.PRIME = { known: false };
+  const rejectedLegacyUpdate = await request(
+    api,
+    "PUT",
+    `/api/auth/tokens/${compositionToken.id}/config`,
+    sessionToken,
+    { config: conflictingLegacyConfig },
+  ).then((result) => result, (error) => ({ status: error.status }));
+  assert.equal(rejectedLegacyUpdate.status, 400);
+  await request(
+    api,
+    "PUT",
+    `/api/auth/config-groups/${compositionGroupId}`,
+    sessionToken,
+    { config: { knowledge: { PRIME: { known: true }, ODD: { known: false } } } },
+  );
+  const updatedProfile = await request(api, "GET", "/api/me", sessionToken);
+  const sharedCompositionApi = updatedProfile.body.apiTokens.find(({ id }) => id === compositionToken.id);
+  const sharedTargetApi = updatedProfile.body.apiTokens.find(({ id }) => id === targetToken.id);
+  assert.equal(sharedCompositionApi.config.games.composition.knowledge.ODD.known, false);
+  assert.equal(sharedCompositionApi.config.games.target.knowledge.ODD.known, false);
+  assert.equal(sharedTargetApi.config.games.target.knowledge.ODD.known, false);
+  const targetGame = await request(
+    api,
+    "POST",
+    "/api/games",
+    targetToken.token,
+    { game: "target" },
+  );
+  const targetScore = await request(
+    api,
+    "POST",
+    `/api/games/${targetGame.body.game_id}/score`,
+    targetToken.token,
+    { number: 314159 },
+  );
+  assert.equal(targetScore.body.score, scoreNumber(314159, sharedTargetApi.config.games.target).score);
 });
 
 test("API token details can be edited and rotated without losing configuration or game sessions", async (t) => {
@@ -399,5 +521,57 @@ test("legacy account configuration migrates to the first token when none existed
   const metadata = Object.values(migrated.users.legacy.apiTokens)[0];
   assert.equal(metadata.id, token.id);
   assert.equal(metadata.config.games.composition.knowledge.PRIME.known, false);
+  assert.equal(Object.keys(migrated.users.legacy.configGroups).length, 4);
+  assert.equal(Object.keys(metadata.configGroupIds).length, 4);
   assert.equal(Object.hasOwn(migrated.users.legacy, "pendingConfigMigration"), false);
+});
+
+test("existing API tokens migrate to three separate configuration groups each", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "rngdle-token-group-migration-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const dataFile = path.join(directory, "store.json");
+  const firstConfig = defaultConfig();
+  firstConfig.games.composition.knowledge.PRIME = { known: false };
+  const secondConfig = defaultConfig();
+  secondConfig.games.collection.knowledge.ODD = { known: false };
+  await fs.writeFile(dataFile, JSON.stringify({
+    version: 1,
+    users: {
+      existing: {
+        sessions: {},
+        apiTokens: {
+          first: {
+            id: "first-token",
+            label: "first",
+            allowedGames: ["composition"],
+            config: firstConfig,
+          },
+          second: {
+            id: "second-token",
+            label: "second",
+            allowedGames: ["collection"],
+            config: secondConfig,
+          },
+        },
+        games: {},
+      },
+    },
+  }));
+  const users = createUserService(dataFile);
+  await users.load();
+  const persisted = JSON.parse(await fs.readFile(dataFile, "utf8"));
+  const migratedUser = persisted.users.existing;
+  assert.equal(Object.keys(migratedUser.configGroups).length, 8);
+  for (const token of Object.values(migratedUser.apiTokens)) {
+    assert.equal(Object.keys(token.configGroupIds).length, 4);
+    assert.equal(new Set(Object.values(token.configGroupIds)).size, 4);
+  }
+  assert.equal(
+    migratedUser.apiTokens.first.config.games.composition.knowledge.PRIME.known,
+    false,
+  );
+  assert.equal(
+    migratedUser.apiTokens.second.config.games.collection.knowledge.ODD.known,
+    false,
+  );
 });

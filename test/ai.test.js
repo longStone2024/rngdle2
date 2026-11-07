@@ -71,6 +71,7 @@ test("knowledge settings are independent between games", () => {
   assert.equal(config.games.collection.knowledge.PRIME.known, false);
   assert.equal(config.games.composition.knowledge.PRIME.known, true);
   assert.equal(config.games.target.knowledge.PRIME.known, true);
+  assert.equal(config.games.climb.knowledge.PRIME.known, true);
 });
 
 test("Digit Composition enumerates legal key positions and uses official badge scoring", async () => {
@@ -173,6 +174,56 @@ test("Target Chase changes exactly one legal digit and minimizes known-score dis
   assert.equal(before.split("").filter((digit, index) => digit !== after[index]).length, 1);
   assert.equal(Number(after[result.position]), result.replacement);
   assert.equal(result.score, analyzeNumber(result.result).totalScore);
+});
+
+test("Digit Climb returns five highest-scoring reachable six-digit numbers within budget", async () => {
+  const config = defaultConfig();
+  const result = await decide(
+    "climb",
+    { number: 314159, budget: 3, answer: 314169 },
+    config,
+  );
+  assert.equal(result.game, "climb");
+  assert.equal(result.solutions.length, 5);
+  assert.ok(result.solutions.some(({ number, cost }) => number === 314159 && cost === 0));
+  assert.ok(result.solutions.every(({ number, cost, score }) =>
+    number >= 0 && number <= 999999 && cost <= 3 && Number.isSafeInteger(score)));
+  assert.ok(result.solutions.every(({ number, score }) =>
+    score === scoreNumber(number, config.games.climb).score));
+  for (let index = 1; index < result.solutions.length; index++) {
+    const previous = result.solutions[index - 1];
+    const current = result.solutions[index];
+    assert.ok(previous.score > current.score
+      || (previous.score === current.score && previous.cost < current.cost)
+      || (previous.score === current.score && previous.cost === current.cost && previous.number > current.number));
+  }
+  assert.equal(result.answer.number, 314169);
+  assert.equal(result.answer.cost, 1);
+  await assert.rejects(
+    () => decide("climb", { number: 314159, budget: 3, answer: 999999 }, config),
+    /cannot be reached within budget/,
+  );
+  await assert.rejects(
+    () => decide("climb", { number: 314159, budget: 4 }, config),
+    /budget must be one of 3, 5, 7/,
+  );
+  await assert.rejects(
+    () => decide("climb", { number: 1_000_000, budget: 3 }, config),
+    /between 0 and 999999/,
+  );
+});
+
+test("Digit Climb pads short room numbers to six digits and validates padded answers", async () => {
+  const config = defaultConfig();
+  const result = await decide(
+    "climb",
+    { number: 60451, budget: 3, answer: 60451 },
+    config,
+  );
+  assert.equal(result.number, 60451);
+  assert.equal(result.answer.number, 60451);
+  assert.equal(result.answer.cost, 0);
+  assert.ok(result.solutions.some(({ number, cost }) => number === 60451 && cost === 0));
 });
 
 test("decisions reject unknown games and malformed game inputs", async () => {

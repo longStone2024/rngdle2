@@ -1,20 +1,21 @@
 # RNGdle AI
 
-为 **Digit Composition、Time Collection、Target Chase** 提供按 API Token 隔离的 AI 配置、游戏权限、API 文档和 Element UI 在线体验。Poker 不在项目范围内。
+为 **Digit Composition、Time Collection、Target Chase、Digit Climb** 提供可跨 API Token 混搭的 AI 配置组、独立游戏权限、API 文档和 Element UI 在线体验。Poker 不在项目范围内。
 
 ## 功能与规则
 
-- 复用项目内的 `calculator.js` 官方计分器、徽章定义和家族最高分规则；每款游戏分别保存 AI 已知的徽章。未知徽章不计入该游戏的评分。
+- 复用项目内的 `calculator.js` 官方计分器、徽章定义和家族最高分规则；每个 API Token 的四个游戏模式分别引用一个配置组，配置组可跨 Token 和模式复用。未知徽章不计入该游戏的评分。
 - Digit Composition 遍历合法的 3 Key / 5 Open 组合，Key 仅放在第 2、5 位，每枚数字最多使用一次；六位数字串允许首位为 0，AI 响应同时提供保留前导零的 `digits` 字符串和数值型 `number`。
 - Time Collection 仅返回 `take` 或 `skip`，不支持替换已收数字。可出现数字限定为官方全量计分百分位 ≥ 50%（Uncommon 或更高）；AI 的有限时域动态规划在同一候选数字集合上，按当前已知徽章配置计算精确分数分布与最优门槛。
 - Target Chase 仅枚举修改一个数字位的合法候选，按当前 API token 已知徽章计算候选分数，再比较用户传入的目标分数。
+- Digit Climb 将起始整数左侧补零为六位数后执行带权最短路径搜索（例如 `60451` 解释为 `060451`），在 3、5 或 7 的预算内组合单步升降（1）、相邻位交换（1.5）和任意设置一位（3），按当前 Token 已知徽章分数返回最优五个可达数字；可同时校验玩家答案是否符合预算。
 - Time Collection 的 Uncommon 候选数字分布由官方全量计分百分位确定，再由 JavaScript 计分器按当前用户已知徽章配置计算该集合的分数；Target Chase 也用同一配置计算每个单数字变更候选的分数。服务不依赖 `ep-table.bin.gz` 或其他预生成 EP 表。
 - 每种不同的 Time Collection 认知配置会计算并缓存 0–1,000,000 范围内、官方计分百分位 ≥ 50% 的个性化分数分布。符合条件的数字集合在服务进程中共享缓存。注册、读取用户配置和保存配置后会在后台预热对应分布；首次决策若预热尚未完成，会等待同一个计算任务，完成后后续请求复用内存缓存。计算期间会定期让出事件循环。
 - 配置页支持按中英文搜索官方计分规则，并在详情对话框中查看中文规则说明、英文原文、官方分值、出现概率和计分家族。
 - API 只返回当前题目的建议；对局状态、计时、完整胜负与排名结算由调用方维护。
 - 登录后的个人主页按游戏和总计显示成功游戏 API 调用、决策、API 游戏会话、Token 数和 UTC 小时/日/月/年调用数；更新功能前没有历史统计的账户默认为 0。在线体验提供玩家对 AI 的完整练习对局，可使用当前账户已选 Token 的配置或输入一个 API Token。
-- 在线练习赛将三款游戏分别实现为独立 Vue 页面，并采用明确标注的本地练习计分：Digit Composition 同时展示并提交 4 道题，共用 120 秒（可调整）；Time Collection 30 个数字、每步 5 秒、双方各 5 个槽位；Target Chase 10 回合、每步 10 秒。Target Chase 的起始数字从原版使用的 0–1,000,000 范围抽取，目标分由当前 Token 配置的官方计分器为同范围内的随机数字计算，避免生成超出实际分数分布的目标。超时判负；练习赛回合数和胜负方式不是原游戏排位规则。自定义 API Token 只在当前页面内存中使用，不保存到浏览器存储。
-- 用户凭证、API Token 和 AI 会话按用户隔离；AI 配置和可访问游戏按 token 隔离。个人 `rng_...` API Token 可编辑用途、调整游戏权限、轮换或撤销；这些管理操作只能由网站登录会话执行。
+- 在线练习赛将四款游戏分别实现为独立 Vue 页面：Digit Composition 四道题共用 120 秒（可调整）；Time Collection 30 个数字、每步 5 秒、双方各 5 个槽位；Target Chase 10 回合、每步 10 秒；Digit Climb 预算 3、5、7 各答一题，共用 120 秒。超时判负；练习赛回合数和胜负方式不是原游戏排位规则。自定义 API Token 只在当前页面内存中使用，不保存到浏览器存储。
+- 用户凭证、API Token 和 AI 会话按用户隔离；每个 Token 的四个模式可分别选择账户下任意配置组，同一配置组可同时被多个 Token 或多个模式使用；游戏访问权限仍按 Token 隔离。创建 Token 时会生成四个默认配置组，旧 Token 配置会在升级首次启动时迁移为各模式配置组。个人 `rng_...` API Token 可编辑用途、调整游戏权限、轮换或撤销；这些管理操作只能由网站登录会话执行。
 - 无第三方 npm 运行依赖；用户数据以 JSON 文件持久化。API 文档整合在主应用中，可在登录前通过首页的「API 文档」入口查看；旧 `/docs.html` 地址会跳转至该页面。
 
 ## 快速部署
@@ -43,7 +44,7 @@ npm start
 
 ### 后端模块
 
-- `games/digit-composition.js`、`games/time-collection.js`、`games/target-chase.js`：三个游戏的决策逻辑；`games/common.js` 和 `games/index.js` 管理共享配置与调度。
+- `games/digit-composition.js`、`games/time-collection.js`、`games/target-chase.js`、`games/digit-climb.js`：四个游戏的决策逻辑；`games/common.js` 和 `games/index.js` 管理共享配置与调度。
 - `users.js`：账户、密码、会话、API Token、OAuth 身份及加密提供商配置的持久化；root 管理员引导。
 - `api.js`：认证、OAuth 授权码回调、用户绑定和管理面板 API 路由。
 - `server.js`：HTTP 服务启动、静态文件和请求错误处理。

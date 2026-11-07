@@ -57,6 +57,19 @@ body { margin: 0; background: var(--background); color: var(--ink); font-family:
 .composition-round-heading span { white-space: nowrap; }
 .composition-round-heading span b { margin-right: 4px; color: #8a641c; }
 .composition-round .el-form-item { margin-bottom: 0; }
+.climb-rounds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+.climb-round { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: #fcfdff; }
+.climb-round-heading { display: grid; gap: 8px; margin-bottom: 12px; color: #586780; font-size: 12px; }
+.climb-round-heading > b { color: #263752; font-size: 14px; }
+.climb-round-heading strong { color: var(--blue); font-size: 18px; font-variant-numeric: tabular-nums; }
+.climb-round .el-form-item { margin-bottom: 0; }
+.climb-result { margin-top: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: #fcfdff; }
+.climb-result h3 { margin: 0 0 8px; font-size: 14px; }
+.climb-result p { color: #59677e; font-size: 13px; line-height: 1.6; }
+.climb-solution-list { display: grid; gap: 5px; padding-left: 24px; color: #59677e; font-size: 12px; }
+.climb-solution-list li { padding-left: 3px; }
+.climb-solution-list li span { margin-right: 14px; }
+.climb-solution-list li strong { color: #3158c6; }
 .decision-timer { display: flex; align-items: center; gap: 8px; width: fit-content; margin: 12px 0; padding: 8px 12px; border: 1px solid #dfe8ff; border-radius: 8px; color: #576782; background: #f5f8ff; font-size: 13px; }
 .decision-timer i { color: var(--blue); font-size: 16px; }
 .decision-timer strong { min-width: 42px; color: #3158c6; font-size: 16px; font-variant-numeric: tabular-nums; text-align: right; }
@@ -84,6 +97,7 @@ body { margin: 0; background: var(--background); color: var(--ink); font-family:
 .game-icon.amber { color: #b77911; background: #fff4d9; }
 .game-icon.blue { color: #3968d8; background: #e9f0ff; }
 .game-icon.violet { color: #7653c8; background: #f1eaff; }
+.game-icon.green { color: #25835b; background: #e6f7ee; }
 .el-input-number { width: 100%; }
 .form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .inline-actions { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -98,6 +112,10 @@ body { margin: 0; background: var(--background); color: var(--ink); font-family:
 .config-toolbar { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin: 6px 0 20px; }
 .config-toolbar h2 { margin: 0 0 7px; font-size: 19px; }
 .config-toolbar p { color: var(--muted); font-size: 13px; margin: 0; }
+.config-group-toolbar { display: flex; align-items: end; gap: 9px; margin: -8px 0 16px; }
+.config-group-picker { display: flex; align-items: center; gap: 9px; }
+.config-group-picker label { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.config-group-picker .el-select { width: 240px; }
 .form-hint { color: var(--muted); font-size: 12px; line-height: 1.6; margin: -4px 0 16px; }
 .game-select { width: 210px; }
 .feature-controls { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
@@ -208,6 +226,9 @@ body { margin: 0; background: var(--background); color: var(--ink); font-family:
   .intro h1 { font-size: 37px; }
   .welcome-row { align-items: start; gap: 14px; flex-direction: column; }
   .config-toolbar { align-items: start; flex-direction: column; }
+  .config-group-toolbar, .config-group-picker { align-items: stretch; flex-wrap: wrap; }
+  .config-group-picker { width: 100%; }
+  .config-group-picker .el-select { flex: 1; width: auto; }
   .welcome-row { align-items: stretch; flex-direction: column; }
   .workspace-token-select { width: 100%; }
   .feature-controls { align-items: stretch; flex-wrap: wrap; }
@@ -225,6 +246,7 @@ body { margin: 0; background: var(--background); color: var(--ink); font-family:
   .game-page-tabs > .el-tabs__content { padding: 12px; }
   .composition-time-setting { align-items: flex-start; flex-wrap: wrap; }
   .composition-rounds { grid-template-columns: 1fr; }
+  .climb-rounds { grid-template-columns: 1fr; }
   .play-setup .el-radio-group { display: grid; gap: 8px; }
   .play-setup .el-radio-button, .play-setup .el-radio-button__inner { width: 100%; }
   .match-history { overflow-x: auto; }

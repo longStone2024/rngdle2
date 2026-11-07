@@ -9,7 +9,7 @@ const SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const SITE_INFO_DEFAULTS = {
   title: "RNGdle AI",
-  description: "为三个 RNGdle 游戏配置和体验 AI。",
+  description: "为四个 RNGdle 游戏配置和体验 AI。",
   announcement: "",
   supportUrl: "",
 };
@@ -28,6 +28,20 @@ function validateAllowedGames(games) {
     throw new UserError(400, `allowedGames 必须是 ${GAME_IDS.join(", ")} 中至少一款不重复的游戏`);
   }
   return [...games];
+}
+
+const GAME_LABELS = {
+  composition: "Digit Composition",
+  collection: "Time Collection",
+  target: "Target Chase",
+  climb: "Digit Climb",
+};
+
+function normalizeGameConfig(game, input) {
+  const config = input?.games
+    ? normalizeConfig(input)
+    : normalizeConfig({ games: { [game]: input } });
+  return config.games[game];
 }
 
 function hashToken(token) {
@@ -120,6 +134,27 @@ function createUserService(dataFile) {
     ]).toString("utf8");
   }
 
+  function publicConfigGroup(group) {
+    return {
+      id: group.id,
+      name: group.name,
+      config: group.config,
+      createdAt: group.createdAt,
+    };
+  }
+
+  function syncTokenConfig(user, token) {
+    const games = {};
+    for (const game of GAME_IDS) {
+      const group = user.configGroups?.[token.configGroupIds?.[game]];
+      games[game] = group
+        ? group.config
+        : token.config?.games?.[game];
+    }
+    token.config = normalizeConfig({ games });
+    return token.config;
+  }
+
   function publicProvider(provider) {
     return {
       id: provider.id,
@@ -157,6 +192,7 @@ function createUserService(dataFile) {
         password: makePassword(process.env.ROOT_PASSWORD),
         sessions: {},
         apiTokens: {},
+        configGroups: {},
         games: {},
         createdAt: new Date().toISOString(),
       };
@@ -270,6 +306,7 @@ function createUserService(dataFile) {
       for (const user of Object.values(store.users)) {
         user.sessions ||= {};
         user.apiTokens ||= {};
+        user.configGroups ||= {};
         user.games ||= {};
         const legacyConfig = user.config;
         if (legacyConfig && Object.keys(user.apiTokens).length === 0) {
@@ -281,7 +318,34 @@ function createUserService(dataFile) {
             && token.allowedGames.every((game) => GAME_IDS.includes(game))
             ? [...new Set(token.allowedGames)]
             : [...GAME_IDS];
-          token.config = normalizeConfig(token.config || legacyConfig);
+          const legacyTokenConfig = normalizeConfig(token.config || legacyConfig);
+          token.configGroupIds = token.configGroupIds && typeof token.configGroupIds === "object"
+            ? token.configGroupIds
+            : {};
+          for (const game of GAME_IDS) {
+            let group = user.configGroups[token.configGroupIds[game]];
+            if (!group) {
+              const id = crypto.randomUUID();
+              group = {
+                id,
+                name: `${token.label || "API token"} · ${GAME_LABELS[game]}`,
+                config: legacyTokenConfig.games[game],
+                createdAt: token.createdAt || new Date().toISOString(),
+              };
+              user.configGroups[id] = group;
+              token.configGroupIds[game] = id;
+            } else {
+              group.id = token.configGroupIds[game];
+              group.name = typeof group.name === "string" && group.name.trim()
+                ? group.name.trim()
+                : `${token.label || "API token"} · ${GAME_LABELS[game]}`;
+              const configGame = GAME_IDS.includes(group.game) ? group.game : game;
+              group.config = normalizeGameConfig(configGame, group.config);
+              delete group.game;
+              group.createdAt ||= token.createdAt || new Date().toISOString();
+            }
+          }
+          syncTokenConfig(user, token);
         }
         delete user.config;
       }
@@ -317,8 +381,13 @@ function createUserService(dataFile) {
           createdAt: entry.createdAt,
           rotatedAt: entry.rotatedAt || null,
           allowedGames: [...entry.allowedGames],
-          config: normalizeConfig(entry.config),
+          configGroupIds: { ...entry.configGroupIds },
+          config: syncTokenConfig(user, entry),
         })),
+      configGroups: Object.values(user.configGroups || {})
+        .filter((group) => auth?.kind !== "api"
+          || Object.values(user.apiTokens[auth.tokenHash]?.configGroupIds || {}).includes(group.id))
+        .map(publicConfigGroup),
     };
   }
 
@@ -404,6 +473,7 @@ function createUserService(dataFile) {
       oauthIdentities: {},
       sessions: { [hashToken(token)]: { expiresAt: Date.now() + SESSION_TTL_MS } },
       apiTokens: {},
+      configGroups: {},
       games: {},
       createdAt: new Date().toISOString(),
     };
@@ -468,12 +538,26 @@ function createUserService(dataFile) {
     const normalizedLabel = label || "API token";
     const id = crypto.randomUUID();
     const tokenHash = hashToken(token);
+    const config = normalizeConfig(user.pendingConfigMigration || defaultConfig());
+    const configGroupIds = {};
+    user.configGroups ||= {};
+    for (const game of GAME_IDS) {
+      const groupId = crypto.randomUUID();
+      configGroupIds[game] = groupId;
+      user.configGroups[groupId] = {
+        id: groupId,
+        name: `${normalizedLabel} · ${GAME_LABELS[game]}`,
+        config: config.games[game],
+        createdAt: new Date().toISOString(),
+      };
+    }
     user.apiTokens[tokenHash] = {
       id,
       label: normalizedLabel,
       createdAt: new Date().toISOString(),
       allowedGames: games,
-      config: normalizeConfig(user.pendingConfigMigration || defaultConfig()),
+      configGroupIds,
+      config,
     };
     delete user.pendingConfigMigration;
     await persist();
@@ -489,9 +573,84 @@ function createUserService(dataFile) {
 
   async function updateApiTokenConfig(user, tokenId, config) {
     const { token } = findApiToken(user, tokenId);
-    token.config = normalizeConfig(config);
+    const normalized = normalizeConfig(config);
+    const groups = new Map();
+    for (const game of GAME_IDS) {
+      const groupId = token.configGroupIds?.[game];
+      const group = user.configGroups?.[groupId];
+      if (!group) continue;
+      const previous = groups.get(groupId);
+      if (previous && JSON.stringify(previous.config) !== JSON.stringify(normalized.games[game])) {
+        throw new UserError(400, "同一配置组用于多个模式时，兼容接口不能保存不同的模式配置；请更新配置组或解除共享");
+      }
+      if (!previous) groups.set(groupId, { group, config: normalized.games[game] });
+    }
+    for (const { group, config: gameConfig } of groups.values()) group.config = gameConfig;
+    syncTokenConfig(user, token);
     await persist();
     return token.config;
+  }
+
+  async function createApiTokenConfigGroup(user, tokenId, game, name, config) {
+    if (!GAME_IDS.includes(game)) throw new UserError(400, `game 必须是 ${GAME_IDS.join(", ")}`);
+    if (typeof name !== "string" || !name.trim() || name.trim().length > 40) {
+      throw new UserError(400, "配置组名称需为 1–40 个字符");
+    }
+    const { token } = findApiToken(user, tokenId);
+    const id = crypto.randomUUID();
+    const group = {
+      id,
+      name: name.trim(),
+      config: normalizeGameConfig(game, config),
+      createdAt: new Date().toISOString(),
+    };
+    user.configGroups ||= {};
+    user.configGroups[id] = group;
+    token.configGroupIds ||= {};
+    token.configGroupIds[game] = id;
+    syncTokenConfig(user, token);
+    await persist();
+    return publicConfigGroup(group);
+  }
+
+  async function assignApiTokenConfigGroup(user, tokenId, game, groupId) {
+    if (!GAME_IDS.includes(game)) throw new UserError(400, `game 必须是 ${GAME_IDS.join(", ")}`);
+    const group = user.configGroups?.[groupId];
+    if (!group) throw new UserError(404, "未找到该配置组");
+    const { token } = findApiToken(user, tokenId);
+    token.configGroupIds ||= {};
+    token.configGroupIds[game] = group.id;
+    syncTokenConfig(user, token);
+    await persist();
+    return {
+      configGroupIds: { ...token.configGroupIds },
+      config: token.config,
+    };
+  }
+
+  async function updateConfigGroup(user, groupId, updates) {
+    const group = user.configGroups?.[groupId];
+    if (!group) throw new UserError(404, "未找到该配置组");
+    if (updates.name !== undefined) {
+      if (typeof updates.name !== "string" || !updates.name.trim() || updates.name.trim().length > 40) {
+        throw new UserError(400, "配置组名称需为 1–40 个字符");
+      }
+      group.name = updates.name.trim();
+    }
+    if (updates.config !== undefined) {
+      const configGame = GAME_IDS.includes(group.game) ? group.game : "composition";
+      group.config = normalizeGameConfig(configGame, updates.config);
+      delete group.game;
+    }
+    for (const token of Object.values(user.apiTokens || {})) {
+      if (Object.values(token.configGroupIds || {}).includes(group.id)) syncTokenConfig(user, token);
+    }
+    await persist();
+    return publicConfigGroup(group);
+  }
+
+  function getTokenConfig(user, token) {
+    return syncTokenConfig(user, token);
   }
 
   async function updateApiTokenGames(user, tokenId, allowedGames) {
@@ -670,6 +829,7 @@ function createUserService(dataFile) {
         oauthIdentities: {},
         sessions: {},
         apiTokens: {},
+        configGroups: {},
         games: {},
         createdAt: new Date().toISOString(),
       };
@@ -827,10 +987,13 @@ function createUserService(dataFile) {
     consumeOAuthState,
     createOAuthState,
     createApiToken,
+    createApiTokenConfigGroup,
+    assignApiTokenConfigGroup,
     deleteOAuthProvider,
     deleteUserAdmin,
     getOAuthProvider,
     getSiteInfo,
+    getTokenConfig,
     findApiToken,
     getUsageStats,
     load,
@@ -853,6 +1016,7 @@ function createUserService(dataFile) {
     updateApiTokenConfig,
     updateApiTokenDetails,
     updateApiTokenGames,
+    updateConfigGroup,
   };
 }
 

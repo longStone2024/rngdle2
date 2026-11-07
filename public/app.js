@@ -4,13 +4,14 @@
 
   const tokenStorageKey = "rngdle-ai-session";
   const validTabs = ["play", "config", "tokens", "profile", "admin", "docs"];
-  const validGames = ["composition", "collection", "target"];
+  const validGames = ["composition", "collection", "target", "climb"];
   const matchTimers = new Map();
-  const MATCH_TIMER_SECONDS = { collection: 5, target: 10 };
+  const MATCH_TIMER_SECONDS = { collection: 5, target: 10, climb: 120 };
   const gameLabels = {
     composition: "Digit Composition",
     collection: "Time Collection",
     target: "Target Chase",
+    climb: "Digit Climb",
   };
   const initialUrlState = readUrlState();
 
@@ -45,6 +46,16 @@
       formatScore: { type: Function, required: true },
     },
     template: "#target-game-page",
+  });
+  Vue.component("digit-climb-game-page", {
+    props: {
+      match: { type: Object, required: true },
+      allowed: { type: Boolean, default: false },
+      canStart: { type: Boolean, default: true },
+      busy: { type: Boolean, default: false },
+      formatScore: { type: Function, required: true },
+    },
+    template: "#digit-climb-game-page",
   });
 
   function readUrlState() {
@@ -111,6 +122,10 @@
         started: false, finished: false, round: 0, number: 0, target: 0,
         playerResult: "", playerPoints: 0, aiPoints: 0, history: [], winnerText: "", remainingSeconds: 10,
       },
+      climbMatch: {
+        started: false, finished: false, rounds: [], playerPoints: 0, aiPoints: 0,
+        history: [], winnerText: "", remainingSeconds: 120, timedOut: false,
+      },
       personalStats: {
         tokenCount: 0,
         total: { apiCalls: 0, decisions: 0, games: 0, frequency: { hour: 0, day: 0, month: 0, year: 0 } },
@@ -119,6 +134,7 @@
       statsUpdatedAt: "",
       tokenLabelDrafts: {},
       tokenGameDrafts: {},
+      configGroups: [],
       features: [],
       oauthProviders: [],
       siteInfo: { title: "RNGdle AI", description: "", announcement: "", supportUrl: "" },
@@ -164,8 +180,15 @@
           ? this.selectedApiToken.allowedGames.map((game) => gameLabels[game]).join("、")
           : "";
       },
+      availableConfigGroups() {
+        return this.configGroups;
+      },
+      selectedConfigGroup() {
+        const groupId = this.selectedApiToken?.configGroupIds?.[this.configGame];
+        return this.configGroups.find((group) => group.id === groupId) || null;
+      },
       anyMatchActive() {
-        return [this.compositionMatch, this.collectionMatch, this.targetMatch]
+        return [this.compositionMatch, this.collectionMatch, this.targetMatch, this.climbMatch]
           .some((match) => match.started && !match.finished);
       },
       personalStatCards() {
@@ -275,9 +298,11 @@
         this.stopMatchTimer("composition");
         this.stopMatchTimer("collection");
         this.stopMatchTimer("target");
+        this.stopMatchTimer("climb");
         this.compositionMatch.started = false;
         this.collectionMatch.started = false;
         this.targetMatch.started = false;
+        this.climbMatch.started = false;
       },
       playAuthMode() {
         this.gameIds = {};
@@ -337,6 +362,7 @@
       this.stopMatchTimer("composition");
       this.stopMatchTimer("collection");
       this.stopMatchTimer("target");
+      this.stopMatchTimer("climb");
     },
     methods: {
     readOAuthToken() {
@@ -607,24 +633,31 @@
         };
         this.statsUpdatedAt = "";
         this.tokenGameDrafts = {};
+        this.configGroups = [];
         this.config = { games: {} };
         this.selectedTokenId = "";
         this.gameIds = {};
         this.stopMatchTimer("composition");
         this.stopMatchTimer("collection");
         this.stopMatchTimer("target");
+        this.stopMatchTimer("climb");
         this.compositionMatch.started = false;
         this.collectionMatch.started = false;
         this.targetMatch.started = false;
+        this.climbMatch.started = false;
         localStorage.removeItem(tokenStorageKey);
       },
       async loadProfile() {
         const profile = await this.request("/api/me");
         this.apiTokens = Array.isArray(profile.apiTokens) ? profile.apiTokens : [];
+        this.configGroups = Array.isArray(profile.configGroups) ? profile.configGroups : [];
         this.tokenLabelDrafts = {};
         this.tokenGameDrafts = {};
         for (const item of this.apiTokens) {
           item.allowedGames = Array.isArray(item.allowedGames) ? item.allowedGames : [...validGames];
+          item.configGroupIds = item.configGroupIds && typeof item.configGroupIds === "object"
+            ? item.configGroupIds
+            : {};
           item.config = item.config && typeof item.config === "object"
             ? item.config
             : JSON.parse(JSON.stringify(this.config));
@@ -682,7 +715,7 @@
         if (!config.games || typeof config.games !== "object") {
           this.$set(config, "games", {});
         }
-        for (const game of ["composition", "collection", "target"]) {
+        for (const game of validGames) {
           if (!config.games[game] || typeof config.games[game] !== "object") {
             this.$set(config.games, game, { knowledge: {} });
           }
@@ -1047,6 +1080,83 @@
           this.busy = false;
         }
       },
+      async startDigitClimbMatch() {
+        if (!this.canPlay("climb") || this.busy || this.anyMatchActive) return;
+        this.stopMatchTimer("climb");
+        const number = 100_000 + Math.floor(Math.random() * 900_000);
+        this.climbMatch = {
+          started: true,
+          finished: false,
+          rounds: [3, 5, 7].map((budget) => ({
+            budget,
+            number,
+            playerResult: "",
+          })),
+          playerPoints: 0,
+          aiPoints: 0,
+          history: [],
+          winnerText: "",
+          remainingSeconds: MATCH_TIMER_SECONDS.climb,
+          timedOut: false,
+        };
+        this.busy = true;
+        try {
+          await this.ensureGame("climb");
+          this.startMatchTimer("climb", MATCH_TIMER_SECONDS.climb);
+        } catch (error) {
+          this.climbMatch.started = false;
+          this.$message.error(error.message);
+        } finally {
+          this.busy = false;
+        }
+      },
+      async submitDigitClimbMatch() {
+        const match = this.climbMatch;
+        if (match.finished || this.busy || !this.canPlay("climb")) return;
+        const invalidRound = match.rounds.findIndex((round) =>
+          !/^[1-9]\d{5}$/.test(round.playerResult));
+        if (invalidRound !== -1) {
+          this.$message.warning(`第 ${invalidRound + 1} 题请输入 100000–999999 的六位数。`);
+          return;
+        }
+        if (!this.pauseMatchTimer("climb")) return;
+        this.busy = true;
+        try {
+          const results = await Promise.all(match.rounds.map(async (round, index) => {
+            const decision = await this.requestDecision("climb", {
+              number: round.number,
+              budget: round.budget,
+              answer: Number(round.playerResult),
+            });
+            if (!Array.isArray(decision.solutions) || decision.solutions.length !== 5
+                || !decision.answer || !Number.isFinite(decision.answer.score)) {
+              throw new Error("Digit Climb API returned an invalid solution list");
+            }
+            return {
+              round: index + 1,
+              budget: round.budget,
+              number: round.number,
+              playerNumber: decision.answer.number,
+              playerCost: decision.answer.cost,
+              playerScore: decision.answer.score,
+              aiSolutions: decision.solutions,
+              aiNumber: decision.solutions[0].number,
+              aiScore: decision.solutions[0].score,
+            };
+          }));
+          for (const result of results) {
+            result.roundResult = this.awardRound(match, result.playerScore, result.aiScore, true);
+          }
+          match.history = results;
+          match.finished = true;
+          match.winnerText = this.matchWinnerText(match.playerPoints, match.aiPoints);
+        } catch (error) {
+          this.$message.error(error.message);
+          this.startMatchTimer("climb", match.remainingSeconds);
+        } finally {
+          this.busy = false;
+        }
+      },
       matchWinnerText(playerPoints, aiPoints) {
         if (playerPoints === aiPoints) return `练习赛平局 · 你 ${playerPoints} 分，AI ${aiPoints} 分`;
         return playerPoints > aiPoints
@@ -1073,20 +1183,116 @@
           this.$message.warning("请先创建并选择 API token");
           return;
         }
+        if (!this.selectedConfigGroup) {
+          this.$message.warning("当前模式尚未选择配置组");
+          return;
+        }
         this.busy = true;
         try {
           const result = await this.request(
-            `/api/auth/tokens/${encodeURIComponent(this.selectedTokenId)}/config`,
-            { method: "PUT", body: { config: this.config } },
+            `/api/auth/config-groups/${encodeURIComponent(this.selectedConfigGroup.id)}`,
+            { method: "PUT", body: { config: this.config.games[this.configGame] } },
           );
-          this.config = result.config;
-          this.$set(this.selectedApiToken, "config", result.config);
+          const index = this.configGroups.findIndex(({ id }) => id === result.group.id);
+          if (index >= 0) this.$set(this.configGroups, index, result.group);
+          for (const item of this.apiTokens) {
+            for (const game of validGames) {
+              if (item.configGroupIds?.[game] !== result.group.id) continue;
+              this.$set(item.config.games, game, result.group.config);
+            }
+          }
+          this.$set(this.config.games, this.configGame, result.group.config);
           this.savedAt = `已于 ${new Date().toLocaleTimeString()} 保存`;
-          this.$message.success("AI 配置已保存");
+          this.$message.success("配置组已保存");
         } catch (error) {
           this.$message.error(error.message);
         } finally {
           this.busy = false;
+        }
+      },
+      async selectConfigGroup(groupId) {
+        if (!this.selectedApiToken || !groupId
+            || groupId === this.selectedApiToken.configGroupIds?.[this.configGame]) return;
+        if (this.anyMatchActive) {
+          this.$message.warning("对局进行中，不能切换配置组");
+          return;
+        }
+        this.busy = true;
+        try {
+          const result = await this.request(
+            `/api/auth/tokens/${encodeURIComponent(this.selectedTokenId)}/config-groups/${this.configGame}`,
+            { method: "PUT", body: { groupId } },
+          );
+          this.$set(this.selectedApiToken, "configGroupIds", result.configGroupIds);
+          this.$set(this.selectedApiToken, "config", result.config);
+          this.config = result.config;
+          this.savedAt = "";
+          this.$message.success("当前模式已切换到所选配置组");
+        } catch (error) {
+          this.$message.error(error.message);
+        } finally {
+          this.busy = false;
+        }
+      },
+      async createConfigGroup() {
+        if (!this.selectedApiToken || this.anyMatchActive) {
+          this.$message.warning("请先选择 API Token，并在对局结束后创建配置组");
+          return;
+        }
+        let name;
+        try {
+          const result = await this.$prompt("为新配置组命名（最多 40 个字符）", "新建配置组", {
+            inputValue: `${this.selectedApiToken.label} · ${gameLabels[this.configGame]}`,
+            inputValidator: (value) => Boolean(value?.trim()) && value.trim().length <= 40,
+            inputErrorMessage: "配置组名称需为 1–40 个字符",
+            confirmButtonText: "创建并切换",
+            cancelButtonText: "取消",
+          });
+          name = result.value.trim();
+        } catch (error) {
+          if (error !== "cancel") this.$message.error(error.message);
+          return;
+        }
+        this.busy = true;
+        try {
+          const result = await this.request(
+            `/api/auth/tokens/${encodeURIComponent(this.selectedTokenId)}/config-groups/${this.configGame}`,
+            {
+              method: "POST",
+              body: { name, config: this.config.games[this.configGame] },
+            },
+          );
+          this.configGroups.push(result.group);
+          this.$set(this.selectedApiToken, "configGroupIds", result.configGroupIds);
+          this.$set(this.selectedApiToken, "config", result.config);
+          this.config = result.config;
+          this.savedAt = "";
+          this.$message.success("配置组已创建并应用到当前 API 模式");
+        } catch (error) {
+          this.$message.error(error.message);
+        } finally {
+          this.busy = false;
+        }
+      },
+      async renameConfigGroup() {
+        if (!this.selectedConfigGroup) return;
+        try {
+          const result = await this.$prompt("输入新的配置组名称（最多 40 个字符）", "重命名配置组", {
+            inputValue: this.selectedConfigGroup.name,
+            inputValidator: (value) => Boolean(value?.trim()) && value.trim().length <= 40,
+            inputErrorMessage: "配置组名称需为 1–40 个字符",
+            confirmButtonText: "保存",
+            cancelButtonText: "取消",
+          });
+          const updated = await this.request(
+            `/api/auth/config-groups/${encodeURIComponent(this.selectedConfigGroup.id)}`,
+            { method: "PUT", body: { name: result.value.trim() } },
+          );
+          const index = this.configGroups.findIndex(({ id }) => id === updated.group.id);
+          if (index >= 0) this.$set(this.configGroups, index, updated.group);
+          this.$message.success("配置组名称已更新");
+        } catch (error) {
+          if (error !== "cancel") this.$message.error(error.message);
         }
       },
       async createToken() {

@@ -143,11 +143,6 @@ async function decide(input, gameConfig) {
   if (!Number.isInteger(current) || current < 0 || current > MAX_NUMBER) {
     throw new DecisionInputError(`current must be an integer between 0 and ${MAX_NUMBER}`);
   }
-  if (!isUncommonNumber(current)) {
-    throw new DecisionInputError(
-      `current must be Uncommon or higher (official score percentile at least 50%; score threshold ${UNCOMMON_SCORE_THRESHOLD})`,
-    );
-  }
   if (!Number.isInteger(remainingTurns) || remainingTurns < 1 || remainingTurns > DEFAULT_TURNS) {
     throw new DecisionInputError(`remainingTurns must be an integer between 1 and ${DEFAULT_TURNS}`);
   }

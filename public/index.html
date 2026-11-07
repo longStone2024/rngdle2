@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="为三个 RNGdle 游戏配置和体验 AI，并通过个人 API token 接入自己的游戏。">
+  <meta name="description" content="为四个 RNGdle 游戏配置和体验 AI，并通过个人 API token 接入自己的游戏。">
   <title>RNGdle AI · 游戏控制台</title>
   <link rel="stylesheet" href="https://unpkg.com/element-ui@2.15.14/lib/theme-chalk/index.css">
   <link rel="stylesheet" href="/styles.css">
@@ -24,7 +24,7 @@
         <div class="intro">
           <div class="eyebrow">PERSONAL GAME AI</div>
           <h1>把你的游戏知识，<br><span>变成 AI 策略。</span></h1>
-          <p>{{ siteInfo.description || '为三个 RNGdle 游戏定制 AI，在线体验每一次决策，并使用独立 API token 接入自己的游戏。' }}</p>
+          <p>{{ siteInfo.description || '为四个 RNGdle 游戏定制 AI，在线体验每一次决策，并使用独立 API token 接入自己的游戏。' }}</p>
           <el-alert v-if="siteInfo.announcement" :title="siteInfo.announcement" type="info" :closable="false" show-icon></el-alert>
           <div class="intro-points">
             <span><i class="el-icon-circle-check"></i> 不知道的高分项不参与计算</span>
@@ -151,24 +151,51 @@
                   @abandon="abandonMatch('target')">
                 </target-game-page>
               </el-tab-pane>
+              <el-tab-pane label="Digit Climb" name="climb">
+                <digit-climb-game-page
+                  :match="climbMatch"
+                  :allowed="canPlay('climb')"
+                  :can-start="!anyMatchActive"
+                  :busy="busy"
+                  :format-score="formatScore"
+                  @start="startDigitClimbMatch"
+                  @submit="submitDigitClimbMatch"
+                  @abandon="abandonMatch('climb')">
+                </digit-climb-game-page>
+              </el-tab-pane>
             </el-tabs>
-            <p class="footnote"><i class="el-icon-info"></i> 每个游戏使用独立 Vue 页面。Digit Composition 每场共享 120 秒（可调整），Time Collection 每步 5 秒，Target Chase 每步 10 秒；超时本场判负。Target Chase 的起始数按原版 0–1,000,000 抽取，目标分由当前 Token 配置的官方计分器生成。</p>
+            <p class="footnote"><i class="el-icon-info"></i> 每个游戏使用独立 Vue 页面。Digit Composition 每场共享 120 秒（可调整），Time Collection 每步 5 秒，Target Chase 每步 10 秒，Digit Climb 三题共享 120 秒；超时本场判负。</p>
           </el-tab-pane>
 
           <el-tab-pane name="config">
             <span slot="label"><i class="el-icon-setting"></i> AI 配置</span>
             <el-card class="config-card" shadow="never">
               <div v-if="selectedApiToken" class="config-toolbar">
-                <div><h2>{{ selectedApiToken.label }} · AI 配置</h2><p>每个 API token 独立保存配置；此 token 未授权的游戏不能创建会话或请求决策。</p></div>
+                <div><h2>{{ selectedApiToken.label }} · AI 配置</h2><p>每个 API Token 的四个模式分别绑定配置组；配置组可跨 Token 和模式复用，同一组也可同时用于多个模式。此 Token 未授权的游戏不能创建会话或请求决策。</p></div>
                 <el-select v-model="configGame" size="small" class="game-select">
                   <el-option v-for="item in allowedGameOptions" :key="item.value" :label="item.label" :value="item.value" :disabled="!selectedApiToken.allowedGames.includes(item.value)"></el-option>
                 </el-select>
               </div>
-              <el-alert v-else title="AI 配置按 API token 隔离。请先创建并选择一个 token。" type="warning" :closable="false" show-icon>
+              <div v-if="selectedApiToken" class="config-group-toolbar">
+                <div class="config-group-picker">
+                  <label>当前模式配置组</label>
+                  <el-select
+                    :value="selectedConfigGroup ? selectedConfigGroup.id : ''"
+                    size="small"
+                    placeholder="选择配置组"
+                    :disabled="anyMatchActive || busy"
+                    @change="selectConfigGroup">
+                    <el-option v-for="group in availableConfigGroups" :key="group.id" :label="group.name" :value="group.id"></el-option>
+                  </el-select>
+                </div>
+                <el-button size="small" :disabled="anyMatchActive || busy" @click="createConfigGroup">新建配置组</el-button>
+                <el-button size="small" :disabled="!selectedConfigGroup || busy" @click="renameConfigGroup">重命名</el-button>
+              </div>
+              <el-alert v-else title="请先创建并选择一个 API Token，以管理它在四个模式中引用的配置组。" type="warning" :closable="false" show-icon>
                 <el-button type="text" @click="activeTab = 'tokens'">创建 API Token</el-button>
               </el-alert>
               <template v-if="selectedApiToken">
-              <el-alert title="分值使用游戏原生徽章分数，并按原引擎规则对同一家族只计最高一项。每个游戏单独保存已知徽章；未勾选的徽章不会进入估值或收集阈值分布。" type="info" :closable="false" show-icon></el-alert>
+              <el-alert title="分值使用游戏原生徽章分数，并按原引擎规则对同一家族只计最高一项。配置组不绑定模式；保存会更新所有在任意模式引用该组的 API Token。未勾选的徽章不会进入估值或收集阈值分布。" type="info" :closable="false" show-icon></el-alert>
               <div class="feature-controls">
                 <el-input v-model="featureSearch" prefix-icon="el-icon-search" clearable size="small" placeholder="搜索名称、规则（中英）、ID 或家族"></el-input>
                 <span>AI 已知 {{ knownFeatureCount }} / {{ features.length }}</span>
@@ -226,7 +253,7 @@
               </el-dialog>
               <div class="config-footer">
                 <span v-if="savedAt"><i class="el-icon-circle-check"></i> {{ savedAt }}</span>
-                <el-button type="primary" :loading="busy" @click="saveConfig">保存此 Token 配置</el-button>
+                <el-button type="primary" :loading="busy" @click="saveConfig">保存当前配置组</el-button>
               </div>
               </template>
             </el-card>
@@ -573,13 +600,59 @@
     </el-card>
   </script>
 
+  <script type="text/x-template" id="digit-climb-game-page">
+    <el-card class="game-card game-page-card" shadow="never">
+      <div class="game-heading">
+        <span class="game-icon green"><i class="el-icon-top"></i></span>
+        <div><h2>Digit Climb</h2><p>三题使用各自不同的六位起点；预算 3、5、7 各答一题，共 2 分钟</p></div>
+      </div>
+      <div v-if="!match.started || match.finished" class="inline-actions">
+        <el-button type="primary" :loading="busy" :disabled="!allowed || !canStart || busy" @click="$emit('start')">开始三题挑战</el-button>
+      </div>
+      <template v-if="match.started">
+        <el-alert :title="match.finished ? match.winnerText : '三个答案共享 2 分钟；操作成本可组合，且不能超过该题预算。'" :type="match.timedOut ? 'error' : match.finished ? 'success' : 'info'" :closable="false"></el-alert>
+        <div v-if="!match.finished">
+          <div class="decision-timer" :class="{ urgent: match.remainingSeconds <= 15 }"><i class="el-icon-timer"></i><span>全局剩余时间</span><strong>{{ match.remainingSeconds }}s</strong></div>
+          <div class="climb-rounds">
+            <section v-for="(round, index) in match.rounds" :key="round.budget" class="climb-round">
+              <div class="climb-round-heading">
+                <b>第 {{ index + 1 }} 题 · 预算 {{ round.budget }}</b>
+                <span>起始数 <strong>{{ round.number }}</strong></span>
+              </div>
+              <el-form label-position="top" size="small">
+                <el-form-item label="输入操作后的六位数">
+                  <el-input v-model.trim="round.playerResult" maxlength="6" inputmode="numeric" placeholder="100000–999999"></el-input>
+                </el-form-item>
+              </el-form>
+            </section>
+          </div>
+          <p class="result-meta">单步升/降一位数字成本 1；交换相邻两位成本 1.5；任意设置一位成本 3。每题可组合或重复操作，预算允许少于上限。</p>
+          <div class="inline-actions">
+            <el-button type="primary" :loading="busy" :disabled="busy || !allowed" @click="$emit('submit')">提交三题并查询 AI 最优解</el-button>
+            <el-button size="mini" :disabled="busy" @click="$emit('abandon')">放弃对局</el-button>
+          </div>
+        </div>
+        <div v-if="match.finished" class="match-score">三题胜场：你 {{ match.playerPoints }} · AI {{ match.aiPoints }}</div>
+        <section v-for="result in match.history" :key="result.round" class="climb-result">
+          <h3>第 {{ result.round }} 题 · 预算 {{ result.budget }} · 起始 {{ result.number }}</h3>
+          <p>你的答案 <strong>{{ result.playerNumber }}</strong> · 花费 {{ result.playerCost }} · EP {{ formatScore(result.playerScore) }}；AI 最优 {{ result.aiNumber }} · EP {{ formatScore(result.aiScore) }} · {{ result.roundResult }}</p>
+          <ol class="climb-solution-list">
+            <li v-for="solution in result.aiSolutions" :key="solution.number">
+              <span>{{ solution.number }}</span><span>花费 {{ solution.cost }}</span><strong>EP {{ formatScore(solution.score) }}</strong>
+            </li>
+          </ol>
+        </section>
+      </template>
+    </el-card>
+  </script>
+
   <script type="text/x-template" id="api-documentation-template">
     <section class="docs">
       <div class="docs-heading">
         <div><div class="eyebrow">DEVELOPER API</div><h2>API 文档</h2></div>
         <el-button v-if="!authenticated" @click="$emit('back')">返回登录</el-button>
       </div>
-      <el-alert title="AI 只返回当前题目的建议；对局状态、回合、计时、排名和结算由调用方维护。API token 绑定独立 AI 配置和允许访问的游戏。" type="info" :closable="false" show-icon></el-alert>
+      <el-alert title="AI 只返回当前题目的建议；对局状态、回合、计时、排名和结算由调用方维护。API Token 绑定允许访问的游戏；各模式分别引用配置组。" type="info" :closable="false" show-icon></el-alert>
       <p>所有 API 使用 JSON。账户注册仅支持 OAuth（密码注册已禁用）；已有密码账户仍可密码登录。网站会话用于管理 token；调用游戏 API 时请使用个人 API token。Token 原文只在创建或轮换时返回；需要重新查看时可轮换生成，旧值会立即失效。</p>
       <h3>认证与 Token 管理</h3>
       <pre><code>Authorization: Bearer &lt;your-token&gt;
@@ -606,19 +679,20 @@ Content-Type: application/json</code></pre>
       <p>OAuth Client Secret 由服务器使用 <code>OAUTH_ENCRYPTION_KEY</code> 以 AES-GCM 加密持久化；管理 API 不返回明文。</p>
       <div class="endpoint">POST /api/auth/tokens</div>
       <pre><code>{ "label": "我的游戏客户端", "allowedGames": ["target", "collection"] }</code></pre>
-      <p>可用游戏为 <code>composition</code>、<code>collection</code>、<code>target</code>；至少指定一款。每个 token 的配置和允许游戏范围相互隔离。</p>
+      <p>可用游戏为 <code>composition</code>、<code>collection</code>、<code>target</code>、<code>climb</code>；至少指定一款。每个 Token 的允许游戏范围独立；各模式分别绑定配置组，配置组可跨 Token 和模式复用。</p>
       <div class="endpoint">PUT /api/auth/tokens/{token_id}</div>
       <pre><code>{ "label": "新的用途备注", "allowedGames": ["target"] }</code></pre>
       <p>仅网站登录会话可修改 Token 用途（备注）和允许访问的游戏；用途长度为 1–40 个字符，游戏权限至少保留一款。</p>
       <div class="endpoint">POST /api/auth/tokens/{token_id}/rotate</div>
       <p>仅网站登录会话可轮换 Token。响应会返回新的完整 Token；旧 Token 立即失效，原用途、游戏权限、AI 配置及已有游戏会话绑定都会保留。请在响应后立即复制新值。</p>
-      <h3>每个 Token 的 AI 配置</h3>
+      <h3>AI 配置组</h3>
       <div class="endpoint">GET /api/me</div>
-      <p>网站会话返回当前账户的 token 元数据、允许游戏和配置；API token 只返回自身信息。不会返回 token 原文。</p>
+      <p>网站会话返回当前账户的 token 元数据、配置组及其配置；API token 只返回自身信息和该 Token 引用的配置组。不会返回 token 原文。每个 Token 的四个模式分别引用一个配置组；配置组不绑定模式，可跨 Token 和多个模式复用。</p>
+      <p>创建 Token 时会为四个模式各生成一个独立配置组；升级后首次启动会把已有的每个 Token 配置迁移为各模式配置组，原有设置会保留。</p>
       <div class="endpoint">GET /api/me/stats</div>
       <p>仅网站登录会话可访问，返回当前账户按游戏和总计的成功游戏 API 调用、决策、API 游戏会话、当前 Token 数，以及 UTC 小时/日/月/年调用数。部署统计功能前没有历史记录的数据按 0 返回；调用统计包含成功创建会话、决策、评分和 Time Collection 数字生成请求。</p>
       <div class="endpoint">PUT /api/auth/tokens/{token_id}/config</div>
-      <p>仅网站会话可管理 token 配置。请求体是配置对象，或 <code>{"config":{...}}</code>。未指定的徽章默认已知；<code>known:false</code> 会从该 token 的计分与决策中排除徽章。</p>
+      <p>兼容旧版客户端的配置更新接口。仅网站会话可调用；请求体是配置对象，或 <code>{"config":{...}}</code>。会更新该 Token 当前引用的配置组；如果同一组被多个模式引用，传入的这些模式配置必须一致。被其他 Token 共用的组也会同步更新。未指定的徽章默认已知。</p>
       <pre><code>{
   "config": {
     "games": {
@@ -631,6 +705,13 @@ Content-Type: application/json</code></pre>
     }
   }
 }</code></pre>
+      <div class="endpoint">POST /api/auth/tokens/{token_id}/config-groups/{game}</div>
+      <p>仅网站会话可创建配置组并应用于指定模式，请求体包含 <code>name</code> 和当前模式的 <code>config</code>。配置组创建后不绑定模式，可继续分配给同一或其他 Token 的任意模式。</p>
+      <div class="endpoint">PUT /api/auth/tokens/{token_id}/config-groups/{game}</div>
+      <pre><code>{ "groupId": "可供任意模式使用的配置组 ID" }</code></pre>
+      <p>将 Token 的指定模式切换到已有配置组。同一配置组可同时分配给一个或多个 Token 的任意模式；保存组配置会同步到所有引用该组的模式。</p>
+      <div class="endpoint">PUT /api/auth/config-groups/{group_id}</div>
+      <p>更新配置组的 <code>name</code> 和/或配置内容 <code>config</code>。更新内容会同步到所有引用此组的 Token 模式。</p>
       <div class="endpoint">PUT /api/auth/tokens/{token_id}/games</div>
       <pre><code>{ "allowedGames": ["target"] }</code></pre>
       <h3>创建游戏会话与请求决策</h3>
@@ -650,6 +731,7 @@ Content-Type: application/json</code></pre>
           <tr><td>Digit Composition<br><code>composition</code></td><td><code>{"key":[1,4,8],"open":[0,2,3,5,9]}</code></td><td>遍历合法组合，生成最佳六位数字串（首位允许为 0）。Key 仅放在第 2、5 位，每枚数字最多用一次；响应同时提供可保留前导零的 <code>digits</code> 与数值型 <code>number</code>。</td></tr>
           <tr><td>Time Collection<br><code>collection</code></td><td><code>{"current":314159,"remainingTurns":10,"slotsRemaining":3}</code></td><td>当前数字必须属于官方全量计分百分位 ≥ 50% 的 Uncommon 或更高范围；仅返回 <code>take</code> 或 <code>skip</code>，并根据符合该条件的候选分布、该 token 已知徽章和剩余回合/槽位计算最优门槛。</td></tr>
           <tr><td>Target Chase<br><code>target</code></td><td><code>{"number":314159,"target":25007367}</code></td><td>只修改一个数字位，选择按该 token 配置计分后与目标分数差距最小的合法结果。</td></tr>
+          <tr><td>Digit Climb<br><code>climb</code></td><td><code>{"number":60451,"budget":5}</code></td><td>预算为 3、5 或 7；数字按六位左侧补零解释（例如 <code>60451</code> 等同于 <code>060451</code>）。组合升/降一位（成本 1）、交换相邻位（1.5）和任意设置一位（3），返回按该 Token 已知徽章分数排名的前五个可达数字。可选传入 <code>answer</code> 校验玩家答案是否在预算内可达并返回分数。</td></tr>
         </tbody>
       </table>
       <h3>完整调用示例</h3>
@@ -663,6 +745,7 @@ curl -X POST "https://你的域名/api/games/返回的game_id/decide" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"number":314159,"target":25007367}'</code></pre>
+      <p>Digit Climb 使用相同的 <code>/decide</code> 端点，请求体示例：<code>{"number":60451,"budget":5,"answer":60451}</code>。<code>decision.solutions</code> 是五个建议项，每项含 <code>number</code>、<code>cost</code>、<code>score</code> 和命中的徽章；传入 <code>answer</code> 时额外返回校验后的 <code>decision.answer</code>。</p>
       <h3>徽章元数据与错误</h3>
       <div class="endpoint">GET /api/status</div>
       <p>公开返回游戏列表、233 个官方计分点及其中英文规则、分类、分值和出现概率。</p>

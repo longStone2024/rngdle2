@@ -2,7 +2,7 @@
   "name": "rngdle-ai-platform",
   "version": "1.0.0",
   "private": true,
-  "description": "Configurable AI for Digit Composition, Time Collection, and Target Chase",
+  "description": "Configurable AI for Digit Composition, Time Collection, Target Chase, and Digit Climb",
   "engines": {
     "node": ">=22.9"
   },

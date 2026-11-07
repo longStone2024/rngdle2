@@ -2,7 +2,7 @@
 
 const { features, scoreKnownBadges } = require("../official-engine");
 
-const GAME_IDS = ["composition", "collection", "target"];
+const GAME_IDS = ["composition", "collection", "target", "climb"];
 const DEFAULT_TURNS = 30;
 const DEFAULT_SLOTS = 5;
 
