@@ -91,8 +91,10 @@ test("root bootstrap, provider secrets, and administrator endpoints are protecte
   assert.equal(rootProfile.body.isRoot, true);
 
   const registered = await users.register({ username: "regular_user", password: "regular-test-password" });
-  const denied = await send(api, "GET", "/api/admin/overview", registered.token);
-  assert.equal(denied.status, 403);
+  await assert.rejects(
+    send(api, "GET", "/api/admin/overview", registered.token),
+    { status: 403 },
+  );
   const overview = await send(api, "GET", "/api/admin/overview", rootToken);
   assert.equal(overview.status, 200);
   assert.equal(overview.body.userCount, 2);
@@ -109,10 +111,14 @@ test("root bootstrap, provider secrets, and administrator endpoints are protecte
     { status: 403 },
   );
 
-  const rootDelete = await send(api, "DELETE", "/api/admin/users/root_admin", rootToken);
-  assert.equal(rootDelete.status, 400);
-  const rootDisable = await send(api, "PATCH", "/api/admin/users/root_admin", rootToken, { disabled: true });
-  assert.equal(rootDisable.status, 400);
+  await assert.rejects(
+    send(api, "DELETE", "/api/admin/users/root_admin", rootToken),
+    { status: 400 },
+  );
+  await assert.rejects(
+    send(api, "PATCH", "/api/admin/users/root_admin", rootToken, { disabled: true }),
+    { status: 400 },
+  );
 });
 
 test("users can change their password without changing username and root bootstrap does not reset it", async (t) => {
