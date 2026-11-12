@@ -1083,13 +1083,16 @@
       async startDigitClimbMatch() {
         if (!this.canPlay("climb") || this.busy || this.anyMatchActive) return;
         this.stopMatchTimer("climb");
-        const number = 100_000 + Math.floor(Math.random() * 900_000);
+        const startingNumbers = new Set();
+        while (startingNumbers.size < 4) {
+          startingNumbers.add(100_000 + Math.floor(Math.random() * 900_000));
+        }
         this.climbMatch = {
           started: true,
           finished: false,
-          rounds: [3, 5, 7].map((budget) => ({
+          rounds: [3.5, 5.5, 5.5, 7.5].map((budget, index) => ({
             budget,
-            number,
+            number: [...startingNumbers][index],
             playerResult: "",
           })),
           playerPoints: 0,
@@ -1114,9 +1117,9 @@
         const match = this.climbMatch;
         if (match.finished || this.busy || !this.canPlay("climb")) return;
         const invalidRound = match.rounds.findIndex((round) =>
-          !/^[1-9]\d{5}$/.test(round.playerResult));
+          !/^\d{1,6}$/.test(round.playerResult));
         if (invalidRound !== -1) {
-          this.$message.warning(`第 ${invalidRound + 1} 题请输入 100000–999999 的六位数。`);
+          this.$message.warning(`第 ${invalidRound + 1} 题请输入 0–999999 的六位数。`);
           return;
         }
         if (!this.pauseMatchTimer("climb")) return;

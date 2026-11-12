@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RNG Room Solver (Tabbed + Collect + AI)
 // @namespace    rngroom.solver
-// @version      11.1.0
+// @version      11.2.0
 // @description  被动监听房间 API，使用可配置的 RNGdle AI 网站 API 决策并填充答案
 // @match        *://rngdle.jdscript.dev/*
 // @grant        unsafeWindow
@@ -20,6 +20,7 @@
     const MIN_REMAIN_MS  = 2500;
     const ROOM_RE        = /\/api\/rooms\/([A-Za-z0-9_-]+)(?:[/?#]|$)/;
     const API_RETRY_MS   = 8000;
+    const DEFAULT_CLIMB_BUDGETS = [3.5, 5.5, 5.5, 7.5];
 
     const W = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
@@ -639,12 +640,59 @@
         computeCollectDecisionAsync();
     }
 
+    // ============================================================
+    // climb 模式
+    // ============================================================
+    function getClimbHands() {
+        if (!room || room.mode !== 'climb') return [];
+        const defaultBudgets = DEFAULT_CLIMB_BUDGETS;
+        const budgets = Array.isArray(room.config?.budgets)
+            ? room.config.budgets.map(Number)
+            : defaultBudgets;
+        const budgetAt = i => Number(budgets[i] ?? defaultBudgets[i] ?? 5.5);
+
+        let raw = null;
+        if (Array.isArray(room.hands)) raw = room.hands;
+        else if (Array.isArray(room.starts)) raw = room.starts;
+        else if (Array.isArray(room.startNumbers)) raw = room.startNumbers;
+        else if (Array.isArray(room.numbers)) raw = room.numbers;
+        else if (Array.isArray(room.config?.hands)) raw = room.config.hands;
+        else if (Array.isArray(room.config?.starts)) raw = room.config.starts;
+        else if (Array.isArray(room.config?.startNumbers)) raw = room.config.startNumbers;
+        else if (Array.isArray(room.config?.numbers)) raw = room.config.numbers;
+        else if (Array.isArray(room.number)) raw = room.number;
+
+        if (Array.isArray(raw)) {
+            return raw.map((item, i) => {
+                if (item && typeof item === 'object') {
+                    const number = Number(item.number ?? item.start ?? item.value);
+                    const budget = Number(item.budget ?? budgetAt(i));
+                    return { number, budget };
+                }
+                return { number: Number(item), budget: budgetAt(i) };
+            }).filter(h =>
+                Number.isInteger(h.number) && h.number >= 0 && h.number <= 999999
+                && Number.isFinite(h.budget)
+            );
+        }
+
+        // 旧格式兼容：单个起始数字 + budgets 数组
+        if (Number.isInteger(room.number)) {
+            return budgets.map((b) => ({ number: room.number, budget: Number(b) }))
+                .filter(h => Number.isFinite(h.budget));
+        }
+        return [];
+    }
+
+    function climbHandsKey(hands) {
+        return (hands || []).map(h => `${h.number}:${h.budget}`).join('|');
+    }
+
     function climbKey(
-        number = room?.number,
-        budgets = room?.config?.budgets ?? [3, 5, 7],
-        revision = room?.answerRevision ?? 0,
+        hands = getClimbHands(),
+        revision = Number.isInteger(room?.answerRevision) ? room.answerRevision : 0,
     ) {
-        return `${currentCode}:${number}:${(budgets || []).join(',')}:${revision}`;
+        return `${currentCode}:${climbHandsKey(hands)}:${revision}`;
     }
 
     function isSupportedClimbRoom() {
@@ -661,55 +709,58 @@
             climbDecisionBusy = false;
             return;
         }
-        const budgets = room.config?.budgets ?? [3, 5, 7];
-        if (!isSupportedClimbRoom()) {
+        const hands = getClimbHands();
+        if (!hands.length) {
             climbDecisionToken++;
-            climbDecision = null;
             climbDecisionBusy = false;
-            setStatus('Digit Climb Solver 仅支持非排位私密 best-answers 训练房间', 'error');
-            return;
-        }
-        if (!Number.isInteger(room.number) || room.number < 0 || room.number > 999999
-            || !Array.isArray(budgets) || budgets.length !== 3
-            || new Set(budgets).size !== 3
-            || budgets.some((budget) => ![3, 5, 7].includes(budget))) {
-            climbDecisionToken++;
             climbDecision = null;
-            climbDecisionBusy = false;
-            setStatus('Digit Climb 房间数据无效（需要六位起始数和预算 3、5、7）', 'error');
+            setStatus('Digit Climb 房间缺少起始数字，无法计算', 'error');
+            updatePanel();
             return;
         }
 
         const revision = Number.isInteger(room.answerRevision) ? room.answerRevision : 0;
-        const key = climbKey(room.number, budgets, revision);
+        const key = climbKey(hands, revision);
         if (climbDecisionKey === key && (climbDecisionBusy || climbDecision)) return;
         if (climbDecisionKey === key && Date.now() < climbDecisionRetryAt) return;
 
         const token = ++climbDecisionToken;
-        const snapshot = { code: currentCode, number: room.number, budgets: [...budgets], revision };
+        const snapshot = { code: currentCode, hands, revision, key };
         climbDecisionKey = key;
         climbDecision = null;
         climbDecisionBusy = true;
         updatePanel();
 
-        Promise.all(snapshot.budgets.map(async (budget) => {
-            const result = await askAi('climb', { number: snapshot.number, budget });
+        Promise.all(snapshot.hands.map(async (hand) => {
+            const result = await askAi('climb', { number: hand.number, budget: hand.budget });
             const best = result.solutions?.[0];
             if (!Array.isArray(result.solutions) || result.solutions.length !== 5
                 || !Number.isInteger(best?.number) || best.number < 0 || best.number > 999999
                 || !Number.isFinite(best.score)) {
-                throw new Error(`预算 ${budget} 的 Digit Climb 决策响应无效`);
+                throw new Error(`预算 ${hand.budget} 的 Digit Climb 决策响应无效`);
             }
-            return { budget, number: best.number, score: best.score, cost: best.cost, solutions: result.solutions };
+            return {
+                budget: hand.budget,
+                start: hand.number,
+                number: best.number,
+                score: best.score,
+                cost: best.cost,
+                solutions: result.solutions,
+            };
         })).then((rounds) => {
             if (token !== climbDecisionToken || currentCode !== snapshot.code || !room
-                || room.mode !== 'climb' || room.number !== snapshot.number || room.submitted
+                || room.mode !== 'climb' || room.submitted
                 || (room.answerRevision ?? 0) !== snapshot.revision
-                || (room.config?.budgets ?? [3, 5, 7]).join(',') !== snapshot.budgets.join(',')) return;
-            climbDecision = { key, number: snapshot.number, budgets: snapshot.budgets, revision, rounds };
+                || climbHandsKey(getClimbHands()) !== climbHandsKey(snapshot.hands)) return;
+            climbDecision = {
+                key: snapshot.key,
+                hands: snapshot.hands,
+                revision: snapshot.revision,
+                rounds,
+            };
             climbDecisionBusy = false;
             climbDecisionRetryAt = 0;
-            setStatus('Digit Climb 三题决策完成', 'ok');
+            setStatus('Digit Climb 决策完成', 'ok');
             updatePanel();
             maybeAutoSubmitClimb();
         }).catch((error) => {
@@ -1386,15 +1437,18 @@
 
     async function submitClimb() {
         if (executing || !canExecute() || !isSupportedClimbRoom() || !climbDecision) return;
+        const hands = getClimbHands();
+        const revision = Number.isInteger(room.answerRevision) ? room.answerRevision : 0;
         const snapshot = {
             code: currentCode,
-            number: room.number,
-            revision: Number.isInteger(room.answerRevision) ? room.answerRevision : 0,
-            key: climbDecision.key,
+            hands,
+            revision,
+            key: climbKey(hands, revision),
             answers: climbDecision.rounds.map((round) => round.number),
         };
-        if (snapshot.key !== climbKey(snapshot.number, climbDecision.budgets, snapshot.revision)
-            || snapshot.answers.length !== 3) {
+        if (snapshot.key !== climbDecision.key
+            || snapshot.answers.length !== snapshot.hands.length
+            || snapshot.answers.length === 0) {
             setStatus('Digit Climb 房间状态已变化，请等待重新计算', 'error');
             return;
         }
@@ -1406,7 +1460,7 @@
         try {
             const url = `${API_ORIGIN}/api/rooms/${encodeURIComponent(snapshot.code)}/submit`;
             await postJson(url, { revision: snapshot.revision, answers: snapshot.answers });
-            setStatus(`已一次提交三题：${snapshot.answers.join(' / ')}`, 'ok');
+            setStatus(`已一次提交${snapshot.answers.length}题：${snapshot.answers.join(' / ')}`, 'ok');
         } catch (error) {
             setStatus('Digit Climb 提交失败；为避免重复提交，本版本不会自动重发: ' + (error.message || error), 'error');
         } finally {
@@ -2061,7 +2115,7 @@
         const hint = shadow.querySelector('.collect-hint');
         if (hint) {
             if (isClimb) {
-                hint.innerHTML = 'Digit Climb：根据房间起点和 3、5、7 预算计算三题，并通过一次 submit 请求提交答案。';
+                hint.innerHTML = 'Digit Climb：每场四手，预算依次为 3.5、5.5、5.5、7.5；根据每手起点计算答案，并通过一次 submit 请求提交。';
             } else if (isCompose) {
                 hint.innerHTML = '组合模式：网站 AI 计算最优解并 draft 提交。勾选「自动执行」自动提交。';
             } else if (isCollect) {
@@ -2269,8 +2323,10 @@
             parts.push(`<span class="sep">·</span>总分 <b>${totalScore}</b>`);
             if (room.submitted) parts.push(`<span class="sep">·</span><span class="ok">已提交</span>`);
         } else if (room.mode === 'climb') {
-            parts.push(`Digit Climb <b>${climbDecision?.rounds.length ?? 0}</b>/3`);
-            parts.push(`<span class="sep">·</span>起点 <b>${room.number ?? '—'}</b>`);
+            const hands = getClimbHands();
+            const totalHands = hands.length || 4;
+            parts.push(`Digit Climb <b>${climbDecision?.rounds.length ?? 0}</b>/${totalHands}`);
+            parts.push(`<span class="sep">·</span>预算 <b>${hands.map(h => h.budget).join(' / ') || '—'}</b>`);
             const rem = remainingMs();
             const cls = rem < 10000 ? 'low' : rem < 30000 ? 'med' : '';
             parts.push(`<span class="sep">·</span><span class="countdown ${cls}">剩余 ${(rem / 1000).toFixed(1)}s</span>`);
@@ -2310,11 +2366,12 @@
             const solved = !!climbDecision;
             const submitted = !!room.submitted;
             const attempted = climbSubmitAttemptKey === climbDecision?.key;
+            const handCount = climbDecision?.rounds.length || getClimbHands().length || 4;
             runBtn.disabled = !canExecute() || executing;
             runBtn.textContent = climbSubmitting ? '提交中…'
                 : submitted ? '已提交'
                     : attempted ? '已尝试'
-                    : climbDecisionBusy ? 'AI 计算中…' : '提交三题';
+                    : climbDecisionBusy ? 'AI 计算中…' : `提交${handCount}题`;
             countLabel.textContent = solved
                 ? climbDecision.rounds.map(({ budget, score }) => `${budget}: ${fmt(score)} EP`).join(' · ')
                 : climbDecisionBusy ? '网站 AI 计算中…' : '';
@@ -2527,12 +2584,13 @@
         }
         return wrap;
     }
+
     function buildClimbView() {
         const wrap = document.createElement('div');
         if (!climbDecision) {
             const div = document.createElement('div');
             div.className = 'empty';
-            div.textContent = climbDecisionBusy ? '网站 AI 正在计算三个预算的答案…'
+            div.textContent = climbDecisionBusy ? '网站 AI 正在计算各手答案…'
                 : room?.submitted ? '本房间的答案已提交。'
                     : statusText || '等待 Digit Climb 房间数据…';
             wrap.appendChild(div);
@@ -2540,14 +2598,16 @@
         }
 
         const tbl = document.createElement('table');
-        tbl.innerHTML = '<thead><tr><th>#</th><th>预算</th><th>AI 答案</th><th>花费</th><th>EP</th></tr></thead><tbody></tbody>';
+        tbl.innerHTML = '<thead><tr><th>#</th><th>起点</th><th>预算</th><th>AI 答案</th><th>花费</th><th>EP</th></tr></thead><tbody></tbody>';
         const tbody = tbl.querySelector('tbody');
         climbDecision.rounds.forEach((round, index) => {
             const tr = document.createElement('tr');
             if (index === 0) tr.className = 'best';
+            const start = round.start ?? climbDecision.hands[index]?.number ?? '—';
             tr.innerHTML = `<td class="dim">${index + 1}</td>
+                <td class="num">${start}</td>
                 <td>${round.budget}</td>
-                <td class="num">${round.number}</td>
+                <td class="num">${String(round.number).padStart(6, '0')}</td>
                 <td>${round.cost}</td>
                 <td>${fmt(round.score)}</td>`;
             tbody.appendChild(tr);
@@ -2558,10 +2618,11 @@
         note.textContent = room?.submitted ? '已提交'
             : climbSubmitAttemptKey === climbDecision.key
                 ? '已发送提交请求，等待房间状态更新。'
-                : '点击「提交三题」后只发送一次 POST /submit。';
+                : `点击「提交${climbDecision.rounds.length}题」后只发送一次 POST /submit。`;
         wrap.appendChild(note);
         return wrap;
     }
+
     function buildComposeView() {
         const wrap = document.createElement('div');
         if (!composeState) {

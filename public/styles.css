@@ -57,7 +57,7 @@ body { margin: 0; background: var(--background); color: var(--ink); font-family:
 .composition-round-heading span { white-space: nowrap; }
 .composition-round-heading span b { margin-right: 4px; color: #8a641c; }
 .composition-round .el-form-item { margin-bottom: 0; }
-.climb-rounds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+.climb-rounds { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
 .climb-round { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: #fcfdff; }
 .climb-round-heading { display: grid; gap: 8px; margin-bottom: 12px; color: #586780; font-size: 12px; }
 .climb-round-heading > b { color: #263752; font-size: 14px; }

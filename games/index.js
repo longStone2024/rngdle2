@@ -33,6 +33,7 @@ module.exports = {
   isUncommonNumber: require("../official-engine").isUncommonNumber,
   percentileForNumber: require("../official-engine").percentileForNumber,
   computeOptimalThresholds: collection.computeOptimalThresholds,
+  setThresholdCacheDirectory: collection.setThresholdCacheDirectory,
   decide,
   decideDigitClimb: climb.decide,
   prewarmCollection,

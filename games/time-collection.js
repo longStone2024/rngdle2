@@ -1,7 +1,9 @@
 "use strict";
 
+const crypto = require("node:crypto");
+const fs = require("node:fs/promises");
+const path = require("node:path");
 const {
-  UNCOMMON_SCORE_THRESHOLD,
   createKnownBadgeScorer,
   isUncommonNumber,
 } = require("../official-engine");
@@ -16,7 +18,13 @@ const {
 const MAX_NUMBER = 1_000_000;
 const DISTRIBUTION_SIZE = MAX_NUMBER + 1;
 const MAX_CACHED_DISTRIBUTIONS = 4;
+const CACHE_VERSION = 1;
+const DEFAULT_CACHE_DIRECTORY = path.join(
+  path.dirname(path.resolve(process.env.DATA_FILE || path.join(__dirname, "../data/store.json"))),
+  "time-collection-dp",
+);
 const distributionCache = new Map();
+let cacheDirectory = DEFAULT_CACHE_DIRECTORY;
 let eligibleNumbersPromise;
 
 function lowerBound(sorted, target) {
@@ -69,7 +77,66 @@ function distributionKey(known) {
   return [...known].sort().join(",");
 }
 
-async function buildThresholds(known) {
+function cacheFilePath(key) {
+  const filename = crypto.createHash("sha256")
+    .update(`${CACHE_VERSION}:${key}`)
+    .digest("hex");
+  return path.join(cacheDirectory, `${filename}.json`);
+}
+
+function decodeThresholds(value, key) {
+  if (!value || value.version !== CACHE_VERSION || value.key !== key
+      || !Array.isArray(value.thresholds) || value.thresholds.length !== DEFAULT_TURNS + 1) {
+    throw new Error("Persisted Time Collection DP cache has an invalid format");
+  }
+  return value.thresholds.map((row, remainingTurns) => {
+    if (!Array.isArray(row) || row.length !== DEFAULT_SLOTS + 1
+        || row.some((threshold, slotsLeft) => (
+          (threshold !== null && !Number.isFinite(threshold))
+          || (threshold === null && (remainingTurns === 0 || remainingTurns !== slotsLeft))
+        ))) {
+      throw new Error("Persisted Time Collection DP cache has an invalid threshold row");
+    }
+    return Float64Array.from(row, (threshold) =>
+      threshold === null ? Number.NEGATIVE_INFINITY : threshold);
+  });
+}
+
+async function loadThresholds(key) {
+  let contents;
+  try {
+    contents = await fs.readFile(cacheFilePath(key), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  let value;
+  try {
+    value = JSON.parse(contents);
+  } catch (error) {
+    throw new Error("Persisted Time Collection DP cache contains invalid JSON", { cause: error });
+  }
+  return decodeThresholds(value, key);
+}
+
+async function saveThresholds(key, thresholds) {
+  const file = cacheFilePath(key);
+  await fs.mkdir(cacheDirectory, { recursive: true });
+  const serializedThresholds = thresholds.map((row) =>
+    Array.from(row, (threshold) => Number.isFinite(threshold) ? threshold : null));
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify({
+    version: CACHE_VERSION,
+    key,
+    thresholds: serializedThresholds,
+  }), { mode: 0o600 });
+  await fs.rename(temporary, file);
+}
+
+async function buildThresholds(known, key) {
+  const cached = await loadThresholds(key);
+  if (cached) return cached;
+
   const eligibleNumbers = await getEligibleNumbers();
   const scores = new Uint32Array(eligibleNumbers.length);
   const scoreKnown = createKnownBadgeScorer(known);
@@ -85,7 +152,9 @@ async function buildThresholds(known) {
   }
   scores.sort();
   const prefix = makePrefixSums(scores);
-  return computeThresholds(scores, prefix, DEFAULT_TURNS, DEFAULT_SLOTS);
+  const thresholds = computeThresholds(scores, prefix, DEFAULT_TURNS, DEFAULT_SLOTS);
+  await saveThresholds(key, thresholds);
+  return thresholds;
 }
 
 async function buildEligibleNumbers() {
@@ -123,7 +192,7 @@ function getThresholds(known) {
     return cached;
   }
 
-  const pending = buildThresholds(known);
+  const pending = buildThresholds(known, key);
   distributionCache.set(key, pending);
   pending.catch(() => {
     if (distributionCache.get(key) === pending) distributionCache.delete(key);
@@ -138,13 +207,18 @@ function warmThresholds(known) {
   return getThresholds(known);
 }
 
+function setThresholdCacheDirectory(directory = DEFAULT_CACHE_DIRECTORY) {
+  if (typeof directory !== "string" || !directory.trim()) {
+    throw new TypeError("Time Collection DP cache directory must be a non-empty path");
+  }
+  cacheDirectory = path.resolve(directory);
+  distributionCache.clear();
+}
+
 async function decide(input, gameConfig) {
   const { current, remainingTurns, slotsRemaining } = input;
   if (!Number.isInteger(current) || current < 0 || current > MAX_NUMBER) {
     throw new DecisionInputError(`current must be an integer between 0 and ${MAX_NUMBER}`);
-  }
-  if (!isUncommonNumber(current)) {
-    throw new DecisionInputError("current must be an Uncommon or higher number");
   }
   if (!Number.isInteger(remainingTurns) || remainingTurns < 1 || remainingTurns > DEFAULT_TURNS) {
     throw new DecisionInputError(`remainingTurns must be an integer between 1 and ${DEFAULT_TURNS}`);
@@ -195,6 +269,7 @@ module.exports = {
     const sorted = [...scores].sort((a, b) => a - b);
     return computeThresholds(sorted, makePrefixSums(sorted), turns, slots);
   },
+  setThresholdCacheDirectory,
   warmThresholds,
   decide,
 };

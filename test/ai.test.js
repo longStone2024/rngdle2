@@ -2,6 +2,9 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
 const {
   analyzeNumber,
   features,
@@ -17,6 +20,7 @@ const {
   computeOptimalThresholds,
   decide,
   prewarmCollection,
+  setThresholdCacheDirectory,
 } = require("../games");
 
 function findCommonNumber() {
@@ -159,6 +163,28 @@ test("Time Collection prewarming shares the personalized distribution with later
   assert.equal(decision.threshold, 0);
 });
 
+test("Time Collection persists DP thresholds and reloads them from disk", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "rngdle-collection-dp-"));
+  t.after(async () => {
+    setThresholdCacheDirectory();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  setThresholdCacheDirectory(directory);
+
+  const config = defaultConfig();
+  for (const feature of features) config.games.collection.knowledge[feature.id] = { known: false };
+  const firstThresholds = await prewarmCollection(config);
+  const files = await fs.readdir(directory);
+  assert.equal(files.length, 1);
+  const persisted = JSON.parse(await fs.readFile(path.join(directory, files[0]), "utf8"));
+  assert.equal(persisted.version, 1);
+  assert.ok(Array.isArray(persisted.thresholds));
+
+  setThresholdCacheDirectory(directory);
+  const loadedThresholds = await prewarmCollection(config);
+  assert.deepEqual(loadedThresholds, firstThresholds);
+});
+
 test("optimal stopping thresholds use the exact finite-horizon recurrence", () => {
   const thresholds = computeOptimalThresholds([0, 10, 20, 30], 3, 1);
   assert.equal(thresholds[1][1], Number.NEGATIVE_INFINITY);
@@ -199,13 +225,19 @@ test("Digit Climb returns five highest-scoring reachable six-digit numbers withi
   }
   assert.equal(result.answer.number, 314169);
   assert.equal(result.answer.cost, 1);
+  const swapped = await decide(
+    "climb",
+    { number: 314159, budget: 3.5, answer: 341159 },
+    config,
+  );
+  assert.equal(swapped.answer.cost, 1.5);
   await assert.rejects(
     () => decide("climb", { number: 314159, budget: 3, answer: 999999 }, config),
     /cannot be reached within budget/,
   );
   await assert.rejects(
     () => decide("climb", { number: 314159, budget: 4 }, config),
-    /budget must be one of 3, 5, 7/,
+    /budget must be one of 3, 3.5, 5, 5.5, 7, 7.5/,
   );
   await assert.rejects(
     () => decide("climb", { number: 1_000_000, budget: 3 }, config),

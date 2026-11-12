@@ -5,7 +5,7 @@ const { knownBadges, DecisionInputError } = require("./common");
 
 const MAX_NUMBER = 999_999;
 const MIN_NUMBER = 0;
-const ALLOWED_BUDGETS = [3, 5, 7];
+const ALLOWED_BUDGETS = [3, 3.5, 5, 5.5, 7, 7.5];
 
 class MinHeap {
   constructor() {

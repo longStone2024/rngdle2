@@ -164,7 +164,7 @@
                 </digit-climb-game-page>
               </el-tab-pane>
             </el-tabs>
-            <p class="footnote"><i class="el-icon-info"></i> 每个游戏使用独立 Vue 页面。Digit Composition 每场共享 120 秒（可调整），Time Collection 每步 5 秒，Target Chase 每步 10 秒，Digit Climb 三题共享 120 秒；超时本场判负。</p>
+            <p class="footnote"><i class="el-icon-info"></i> 每个游戏使用独立 Vue 页面。Digit Composition 每场共享 120 秒（可调整），Time Collection 每步 5 秒，Target Chase 每步 10 秒，Digit Climb 四题共享 120 秒；超时本场判负。</p>
           </el-tab-pane>
 
           <el-tab-pane name="config">
@@ -604,35 +604,35 @@
     <el-card class="game-card game-page-card" shadow="never">
       <div class="game-heading">
         <span class="game-icon green"><i class="el-icon-top"></i></span>
-        <div><h2>Digit Climb</h2><p>三题使用各自不同的六位起点；预算 3、5、7 各答一题，共 2 分钟</p></div>
+        <div><h2>Digit Climb</h2><p>四题各用不同的六位起点；预算 3.5、5.5、5.5、7.5，共 2 分钟</p></div>
       </div>
       <div v-if="!match.started || match.finished" class="inline-actions">
-        <el-button type="primary" :loading="busy" :disabled="!allowed || !canStart || busy" @click="$emit('start')">开始三题挑战</el-button>
+        <el-button type="primary" :loading="busy" :disabled="!allowed || !canStart || busy" @click="$emit('start')">开始四题挑战</el-button>
       </div>
       <template v-if="match.started">
-        <el-alert :title="match.finished ? match.winnerText : '三个答案共享 2 分钟；操作成本可组合，且不能超过该题预算。'" :type="match.timedOut ? 'error' : match.finished ? 'success' : 'info'" :closable="false"></el-alert>
+        <el-alert :title="match.finished ? match.winnerText : '四个答案共享 2 分钟；操作成本可组合，且不能超过该题预算。'" :type="match.timedOut ? 'error' : match.finished ? 'success' : 'info'" :closable="false"></el-alert>
         <div v-if="!match.finished">
           <div class="decision-timer" :class="{ urgent: match.remainingSeconds <= 15 }"><i class="el-icon-timer"></i><span>全局剩余时间</span><strong>{{ match.remainingSeconds }}s</strong></div>
           <div class="climb-rounds">
-            <section v-for="(round, index) in match.rounds" :key="round.budget" class="climb-round">
+            <section v-for="(round, index) in match.rounds" :key="index" class="climb-round">
               <div class="climb-round-heading">
                 <b>第 {{ index + 1 }} 题 · 预算 {{ round.budget }}</b>
                 <span>起始数 <strong>{{ round.number }}</strong></span>
               </div>
               <el-form label-position="top" size="small">
                 <el-form-item label="输入操作后的六位数">
-                  <el-input v-model.trim="round.playerResult" maxlength="6" inputmode="numeric" placeholder="100000–999999"></el-input>
+                  <el-input v-model.trim="round.playerResult" maxlength="6" inputmode="numeric" placeholder="0–999999"></el-input>
                 </el-form-item>
               </el-form>
             </section>
           </div>
           <p class="result-meta">单步升/降一位数字成本 1；交换相邻两位成本 1.5；任意设置一位成本 3。每题可组合或重复操作，预算允许少于上限。</p>
           <div class="inline-actions">
-            <el-button type="primary" :loading="busy" :disabled="busy || !allowed" @click="$emit('submit')">提交三题并查询 AI 最优解</el-button>
+            <el-button type="primary" :loading="busy" :disabled="busy || !allowed" @click="$emit('submit')">提交四题并查询 AI 最优解</el-button>
             <el-button size="mini" :disabled="busy" @click="$emit('abandon')">放弃对局</el-button>
           </div>
         </div>
-        <div v-if="match.finished" class="match-score">三题胜场：你 {{ match.playerPoints }} · AI {{ match.aiPoints }}</div>
+        <div v-if="match.finished" class="match-score">四题胜场：你 {{ match.playerPoints }} · AI {{ match.aiPoints }}</div>
         <section v-for="result in match.history" :key="result.round" class="climb-result">
           <h3>第 {{ result.round }} 题 · 预算 {{ result.budget }} · 起始 {{ result.number }}</h3>
           <p>你的答案 <strong>{{ result.playerNumber }}</strong> · 花费 {{ result.playerCost }} · EP {{ formatScore(result.playerScore) }}；AI 最优 {{ result.aiNumber }} · EP {{ formatScore(result.aiScore) }} · {{ result.roundResult }}</p>
@@ -731,7 +731,7 @@ Content-Type: application/json</code></pre>
           <tr><td>Digit Composition<br><code>composition</code></td><td><code>{"key":[1,4,8],"open":[0,2,3,5,9]}</code></td><td>遍历合法组合，生成最佳六位数字串（首位允许为 0）。Key 仅放在第 2、5 位，每枚数字最多用一次；响应同时提供可保留前导零的 <code>digits</code> 与数值型 <code>number</code>。</td></tr>
           <tr><td>Time Collection<br><code>collection</code></td><td><code>{"current":314159,"remainingTurns":10,"slotsRemaining":3}</code></td><td>当前数字必须属于官方全量计分百分位 ≥ 50% 的 Uncommon 或更高范围；仅返回 <code>take</code> 或 <code>skip</code>，并根据符合该条件的候选分布、该 token 已知徽章和剩余回合/槽位计算最优门槛。</td></tr>
           <tr><td>Target Chase<br><code>target</code></td><td><code>{"number":314159,"target":25007367}</code></td><td>只修改一个数字位，选择按该 token 配置计分后与目标分数差距最小的合法结果。</td></tr>
-          <tr><td>Digit Climb<br><code>climb</code></td><td><code>{"number":60451,"budget":5}</code></td><td>预算为 3、5 或 7；数字按六位左侧补零解释（例如 <code>60451</code> 等同于 <code>060451</code>）。组合升/降一位（成本 1）、交换相邻位（1.5）和任意设置一位（3），返回按该 Token 已知徽章分数排名的前五个可达数字。可选传入 <code>answer</code> 校验玩家答案是否在预算内可达并返回分数。</td></tr>
+          <tr><td>Digit Climb<br><code>climb</code></td><td><code>{"number":60451,"budget":5.5}</code></td><td>支持预算 3、3.5、5、5.5、7 或 7.5；数字按六位左侧补零解释（例如 <code>60451</code> 等同于 <code>060451</code>）。组合升/降一位（成本 1）、交换相邻位（1.5）和任意设置一位（3），返回按该 Token 已知徽章分数排名的前五个可达数字。可选传入 <code>answer</code> 校验玩家答案是否在预算内可达并返回分数。</td></tr>
         </tbody>
       </table>
       <h3>完整调用示例</h3>
@@ -745,7 +745,7 @@ curl -X POST "https://你的域名/api/games/返回的game_id/decide" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"number":314159,"target":25007367}'</code></pre>
-      <p>Digit Climb 使用相同的 <code>/decide</code> 端点，请求体示例：<code>{"number":60451,"budget":5,"answer":60451}</code>。<code>decision.solutions</code> 是五个建议项，每项含 <code>number</code>、<code>cost</code>、<code>score</code> 和命中的徽章；传入 <code>answer</code> 时额外返回校验后的 <code>decision.answer</code>。</p>
+      <p>Digit Climb 使用相同的 <code>/decide</code> 端点，请求体示例：<code>{"number":60451,"budget":5.5,"answer":60451}</code>。<code>decision.solutions</code> 是五个建议项，每项含 <code>number</code>、<code>cost</code>、<code>score</code> 和命中的徽章；传入 <code>answer</code> 时额外返回校验后的 <code>decision.answer</code>。</p>
       <h3>徽章元数据与错误</h3>
       <div class="endpoint">GET /api/status</div>
       <p>公开返回游戏列表、233 个官方计分点及其中英文规则、分类、分值和出现概率。</p>
