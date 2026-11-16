@@ -120,6 +120,16 @@
     let collectDecisionToken = 0;
     let collectDecisionRetryAt = 0;
 
+    // poker 模式（Digit Poker / standup）
+    let pokerState         = null;   // { handId, phase, street, turnId, decision, draft, draftRevision }
+    let pokerKey           = null;
+    let pokerBusy          = false;
+    let pokerToken         = 0;
+    let pokerRetryAt       = 0;
+    let pokerDraftKey      = null;   // 已 draft 到服务器的槽位内容 key
+    let pokerBetSentKey    = null;   // 已发送过的下注 turn key（防重复）
+    let pokerSubmitting    = false;
+
     // 网站 AI 会话
     let solverGameId   = null;
     let solverGameRoom = null;
@@ -302,7 +312,7 @@
     }
 
     function ensureSolverGame(game) {
-        if (!['composition', 'collection', 'target', 'climb'].includes(game)) {
+        if (!['composition', 'collection', 'target', 'climb', 'poker'].includes(game)) {
             return Promise.reject(new Error('不支持的 AI 游戏类型'));
         }
         if (!config.aiApiToken || !config.aiApiUrl) {
@@ -372,6 +382,13 @@
         climbDecision = null;
         climbDecisionBusy = false;
         climbDecisionRetryAt = 0;
+        pokerToken++;
+        pokerKey = null;
+        pokerState = null;
+        pokerBusy = false;
+        pokerRetryAt = 0;
+        pokerDraftKey = null;
+        pokerBetSentKey = null;
         if (!room) {
             updatePanel();
             return;
@@ -379,6 +396,7 @@
         if (room.mode === 'collect') onCollectPayload();
         else if (room.mode === 'compose') onComposePayload();
         else if (room.mode === 'climb') onClimbPayload();
+        else if (room.mode === 'poker') onPokerPayload();
         else if (room.phase === 'playing' && room.number != null && room.target != null) {
             candidatesKey = `${room.number}|${room.target}`;
             requestTargetDecision(candidatesKey);
@@ -438,7 +456,8 @@
         const isCollectMode = data.mode === 'collect';
         const isComposeMode = data.mode === 'compose';
         const isClimbMode = data.mode === 'climb';
-        if (data.code !== code || (!isTargetMode && !isCollectMode && !isComposeMode && !isClimbMode)) return;
+        const isPokerMode = data.mode === 'poker';
+        if (data.code !== code || (!isTargetMode && !isCollectMode && !isComposeMode && !isClimbMode && !isPokerMode)) return;
 
         const isNewRoom = code !== currentCode;
         if (isNewRoom) {
@@ -473,13 +492,22 @@
             climbDecisionRetryAt = 0;
             climbSubmitAttemptKey = null;
             climbSubmitting = false;
+            pokerState = null;
+            pokerKey = null;
+            pokerBusy = false;
+            pokerToken++;
+            pokerRetryAt = 0;
+            pokerDraftKey = null;
+            pokerBetSentKey = null;
+            pokerSubmitting = false;
             if (!visible) showHost();
         }
 
         const previousMode = room ? (room.mode || 'target') : null;
         const incomingMode = isCollectMode ? 'collect'
             : isComposeMode ? 'compose'
-                : isClimbMode ? 'climb' : 'target';
+                : isClimbMode ? 'climb'
+                    : isPokerMode ? 'poker' : 'target';
         const prevRound = room?.round;
         if (previousMode && previousMode !== incomingMode) {
             teardownSolverGame();
@@ -505,6 +533,13 @@
                 climbDecisionBusy = false;
                 climbDecisionKey = null;
                 climbDecision = null;
+            } else if (previousMode === 'poker') {
+                pokerToken++;
+                pokerBusy = false;
+                pokerKey = null;
+                pokerState = null;
+                pokerDraftKey = null;
+                pokerBetSentKey = null;
             }
         }
         room = data;
@@ -529,6 +564,13 @@
             onClimbPayload();
             updatePanel();
             maybeAutoSubmitClimb();
+            return;
+        }
+        // ---- poker 模式 ----
+        if (isPokerMode) {
+            onPokerPayload();
+            updatePanel();
+            maybeAutoActPoker();
             return;
         }
         // ---- target 模式 ----
@@ -787,9 +829,326 @@
         }, jitter(300, 700));
     }
 
+    // ============================================================
+    // poker 模式（Digit Poker / standup）
+    // ============================================================
+    function pokerHand() {
+        return room?.mode === 'poker' ? (room.hand || null) : null;
+    }
+    function pokerSelf() {
+        return pokerHand()?.self || null;
+    }
+    function pokerBoard() {
+        return pokerHand()?.board || [];
+    }
+    function pokerPrivate() {
+        return pokerSelf()?.private || [];
+    }
+    function pokerIsStandup() {
+        return room?.format === 'standup';
+    }
+    function pokerActivePlayers() {
+        const h = pokerHand();
+        if (!h) return [];
+        return h.players.filter(p => !p.folded);
+    }
+    function pokerCanAct() {
+        const s = pokerSelf();
+        return !!s?.canAct;
+    }
+    function pokerCanEdit() {
+        const s = pokerSelf();
+        return !!s?.canEdit && !s.submitted;
+    }
+    function pokerConstructKey() {
+        const h = pokerHand();
+        if (!h) return '';
+        const priv = pokerPrivate().map(t => t.digit).join(',');
+        const board = pokerBoard().map(t => t.digit).join(',');
+        return `${h.id}:${priv}|${board}`;
+    }
+    function pokerBetTurnKey() {
+        const h = pokerHand();
+        if (!h) return '';
+        return `${h.id}:${h.turnId ?? 0}`;
+    }
+
+    // 计算最终构造的最优六位数（EP 最高），并返回 arrangement（token id 数组）。
+    function pokerConstructDecision() {
+        const h = pokerHand();
+        if (!h) return null;
+        const priv = pokerPrivate();
+        const board = pokerBoard();
+        if (priv.length < 3) return null;
+        return pokerState?.construct || null;
+    }
+
+    function onPokerPayload() {
+        if (!room || room.mode !== 'poker') return;
+        const h = pokerHand();
+        if (!h) {
+            pokerToken++;
+            pokerBusy = false;
+            pokerKey = null;
+            pokerState = null;
+            return;
+        }
+        const key = pokerConstructKey();
+        // 换手时重置草稿 / 下注记录
+        if (pokerState && pokerState.handId !== h.id) {
+            pokerDraftKey = null;
+            pokerBetSentKey = null;
+        }
+        if (pokerKey === key && (pokerBusy || pokerState)) return;
+
+        pokerKey = key;
+        pokerBusy = true;
+        pokerState = null;
+        pokerDraftKey = null;
+        updatePanel();
+
+        // 仅当有 3 张私有牌时请求构造决策；bet 决策在需要时单独请求
+        const priv = pokerPrivate();
+        if (priv.length < 3) {
+            pokerBusy = false;
+            updatePanel();
+            return;
+        }
+
+        const token = ++pokerToken;
+        const snapshot = { code: currentCode, key };
+        askAi('poker', {
+            mode: 'construct',
+            private: priv.map(t => t.digit),
+            shared: pokerBoard().map(t => t.digit),
+        }).then((result) => {
+            if (token !== pokerToken || currentCode !== snapshot.code || !room
+                || room.mode !== 'poker' || pokerConstructKey() !== snapshot.key) return;
+            if (!result || !result.best || typeof result.best.digits !== 'string'
+                || result.best.digits.length !== 6
+                || !Number.isFinite(result.best.score)) {
+                throw new Error('Digit Poker 构造决策响应格式无效');
+            }
+            pokerState = {
+                key: snapshot.key,
+                handId: h.id,
+                construct: result.best,
+                digits: result.best.digits,
+                ep: result.best.score,
+            };
+            pokerBusy = false;
+            pokerRetryAt = 0;
+            setStatus('Digit Poker 最优数字已计算', 'ok');
+            updatePanel();
+            maybeAutoActPoker();
+        }).catch((error) => {
+            if (token !== pokerToken) return;
+            pokerState = null;
+            pokerBusy = false;
+            pokerRetryAt = Date.now() + 5000;
+            setStatus('Digit Poker AI 调用失败: ' + error.message, 'error');
+            updatePanel();
+        });
+    }
+
+    // 下注决策：用私有牌 + 已亮公共牌评估，返回 fold/check/call/raise/allin
+    function requestPokerBet() {
+        const h = pokerHand();
+        const s = pokerSelf();
+        if (!h || !s) return null;
+        const priv = pokerPrivate();
+        const board = pokerBoard();
+        if (priv.length < 3) return null;
+        const me = h.players.find(p => p.id === room.you);
+        const toCall = s.toCall ?? 0;
+        const stack = me?.chips ?? 0;
+        const bigBlind = h.bigBlind ?? room.config?.bigBlind ?? 100;
+
+        const token = ++pokerToken;
+        const snapshot = { code: currentCode, key: pokerBetTurnKey(), toCall };
+        pokerBusy = true;
+        updatePanel();
+
+        return askAi('poker', {
+            mode: 'bet',
+            private: priv.map(t => t.digit),
+            shared: board.map(t => t.digit),
+            toCall,
+            pot: h.pot ?? 0,
+            stack,
+            bigBlind,
+            minRaiseTo: s.minRaiseTo ?? 0,
+            currentBet: h.currentBet ?? 0,
+            opponentsActive: pokerActivePlayers().length - 1,
+        }).then((result) => {
+            if (token !== pokerToken || currentCode !== snapshot.code || !room
+                || room.mode !== 'poker' || pokerBetTurnKey() !== snapshot.key) return null;
+            if (!result || !['fold', 'check', 'call', 'raise', 'allin'].includes(result.action)) {
+                throw new Error('Digit Poker 下注决策响应格式无效');
+            }
+            pokerBusy = false;
+            return result;
+        }).catch((error) => {
+            if (token !== pokerToken) return null;
+            pokerBusy = false;
+            pokerRetryAt = Date.now() + 5000;
+            setStatus('Digit Poker 下注决策失败: ' + error.message, 'error');
+            updatePanel();
+            return null;
+        });
+    }
+
+    // 提交下注动作到房间 API：POST /api/rooms/{code}/bet
+    async function pokerSubmitBet(action, amount) {
+        const h = pokerHand();
+        if (!h || !pokerCanAct() || executing) return;
+        const turnKey = `${h.id}:${h.turnId}`;
+        if (pokerBetSentKey === turnKey) return;
+        pokerBetSentKey = turnKey;
+        executing = true;
+        updatePanel();
+        try {
+            const body = { handId: h.id, street: h.street, turnId: h.turnId, type: action };
+            if (action === 'raise' && Number.isSafeInteger(amount)) body.amount = amount;
+            setStatus(`Digit Poker 下注 ${action}…`);
+            await postJson(`${API_ORIGIN}/api/rooms/${encodeURIComponent(currentCode)}/bet`, body);
+            setStatus(`已下注 ${action}`, 'ok');
+        } catch (e) {
+            pokerBetSentKey = null;   // 失败允许重试
+            setStatus('Digit Poker 下注失败: ' + (e.message || e), 'error');
+        } finally {
+            executing = false;
+            updatePanel();
+        }
+    }
+
+    // 提交草稿：POST /api/rooms/{code}/draft
+    async function pokerSubmitDraft() {
+        const h = pokerHand();
+        const s = pokerSelf();
+        if (!h || !s || !pokerCanEdit() || executing || !pokerState?.digits) return;
+        const digits = pokerState.digits.split('').map(Number);
+        const privateTokens = (s.private || []).slice();   // {id, digit}
+        const publicTokens = (h.board || []).slice();        // {id, digit}
+
+        // 第 2、5 位（index 1、4）必须用私有数字，其余位置可用私有或公共。
+        // 把最优数字串的每一位映射到一枚未使用的 token。
+        const used = new Set();
+        const slots = [];
+        const PRIVATE_SLOTS = new Set([1, 4]);
+        for (let i = 0; i < 6; i++) {
+            const digit = digits[i];
+            const needPrivate = PRIVATE_SLOTS.has(i);
+            let token = null;
+            if (needPrivate) {
+                token = privateTokens.find(t => !used.has(t.id) && t.digit === digit);
+            } else {
+                // 优先用公共牌，公共不足再用剩余私有牌
+                token = publicTokens.find(t => !used.has(t.id) && t.digit === digit)
+                    || privateTokens.find(t => !used.has(t.id) && t.digit === digit);
+            }
+            if (!token) {
+                setStatus(`Digit Poker 无法将第 ${i + 1} 位数字 ${digit} 映射到可用 token`, 'error');
+                return;
+            }
+            used.add(token.id);
+            slots.push(token.id);
+        }
+
+        if (pokerDraftKey === JSON.stringify(slots)) return; // 已 draft 过
+        executing = true;
+        updatePanel();
+        try {
+            setStatus('Digit Poker 提交草稿…');
+            await postJson(`${API_ORIGIN}/api/rooms/${encodeURIComponent(currentCode)}/draft`, {
+                handId: h.id,
+                street: h.street,
+                revision: s.draftRevision ?? 0,
+                slots,
+            });
+            pokerDraftKey = JSON.stringify(slots);
+            setStatus('Digit Poker 草稿已保存', 'ok');
+        } catch (e) {
+            setStatus('Digit Poker 草稿提交失败: ' + (e.message || e), 'error');
+        } finally {
+            executing = false;
+            updatePanel();
+        }
+    }
+
+    // 锁定数字：POST /api/rooms/{code}/submit
+    async function pokerSubmitLock() {
+        const h = pokerHand();
+        const s = pokerSelf();
+        if (!h || !s || s.submitted || !pokerState?.digits || executing) return;
+        if (h.phase !== 'showdown') return;
+        // 先确保草稿已提交
+        if (!pokerDraftKey) {
+            await pokerSubmitDraft();
+            if (!pokerDraftKey) return;
+        }
+        executing = true;
+        updatePanel();
+        try {
+            setStatus('Digit Poker 锁定数字…');
+            await postJson(`${API_ORIGIN}/api/rooms/${encodeURIComponent(currentCode)}/submit`, {
+                handId: h.id,
+                revision: s.draftRevision ?? 0,
+            });
+            setStatus('Digit Poker 已锁定', 'ok');
+        } catch (e) {
+            setStatus('Digit Poker 锁定失败: ' + (e.message || e), 'error');
+        } finally {
+            executing = false;
+            updatePanel();
+        }
+    }
+
+    // 自动执行：优先下注，其次 showdown 阶段草稿+锁定
+    function maybeAutoActPoker() {
+        if (!config.autoMode || executing || !room || room.mode !== 'poker') return;
+        const h = pokerHand();
+        const s = pokerSelf();
+        if (!h || !s) return;
+
+        // showdown 阶段：自动构造并锁定
+        if (h.phase === 'showdown' && pokerCanEdit() && pokerState?.digits && !s.submitted) {
+            if (remainingMs() < 5000) return;
+            autoFiredKey = pokerConstructKey();
+            clearTimeout(autoTimer);
+            autoTimer = setTimeout(async () => {
+                autoTimer = null;
+                if (!config.autoMode || executing || !room || room.mode !== 'poker') return;
+                await pokerSubmitDraft();
+                await pokerSubmitLock();
+            }, jitter(300, 700));
+            return;
+        }
+
+        // betting 阶段：自动下注
+        if (h.phase === 'betting' && pokerCanAct()) {
+            const turnKey = `${h.id}:${h.turnId}`;
+            if (pokerBetSentKey === turnKey) return;
+            if (remainingMs() < MIN_REMAIN_MS) return;
+            if (pokerBusy) return;
+            autoFiredKey = turnKey;
+            clearTimeout(autoTimer);
+            autoTimer = setTimeout(async () => {
+                autoTimer = null;
+                if (!config.autoMode || executing || !room || room.mode !== 'poker') return;
+                const decision = await requestPokerBet();
+                if (!decision) return;
+                if (decision.action === 'raise' || decision.action === 'allin') {
+                    await pokerSubmitBet(decision.action, decision.raiseTo ?? undefined);
+                } else {
+                    await pokerSubmitBet(decision.action);
+                }
+            }, jitter(300, 700));
+        }
+    }
+
     async function computeCollectDecisionAsync() {
         if (!room || room.mode !== 'collect' || !collectCurrent) return;
-
         const totalTurns = room.config?.count ?? 30;
         const slots = room.config?.slots ?? 5;
         const remainingTurns = Math.max(1, totalTurns - (room.index ?? 0));
@@ -1278,7 +1637,9 @@
     function serverNow() { return room ? serverFetchedAt + (Date.now() - localFetchedAt) : Date.now(); }
     function remainingMs() {
         if (!room) return 0;
-        const deadline = room.deadline ?? room.end;
+        const deadline = room.mode === 'poker' && room.hand
+            ? (room.hand.deadline ?? room.hand.nextHandAt ?? room.deadline ?? room.end)
+            : (room.deadline ?? room.end);
         if (deadline == null) return 0;
         return Math.max(0, deadline - serverNow());
     }
@@ -1356,6 +1717,24 @@
             if (room.submitted) return false;
             if (remainingMs() <= 2000) return false;
             return true;
+        }
+        if (room.mode === 'poker') {
+            const h = pokerHand();
+            const s = pokerSelf();
+            if (!h || !s) return false;
+            if (executing) return false;
+            // showdown 阶段：可构造并锁定
+            if (h.phase === 'showdown') {
+                if (s.submitted || !pokerState?.digits || !pokerCanEdit()) return false;
+                return remainingMs() > 5000;
+            }
+            // betting 阶段：可下注
+            if (h.phase === 'betting') {
+                if (!pokerCanAct()) return false;
+                if (pokerBetSentKey === `${h.id}:${h.turnId}`) return false;
+                return remainingMs() > MIN_REMAIN_MS;
+            }
+            return false;
         }
         if (room.phase !== 'playing') return false;
         if (room.submitted) return false;
@@ -1694,6 +2073,23 @@
       font-size: 12px; color: #a1a1aa; border-top: 1px solid #26262b; }
     .compose-footer b { color: #4ade80; }
 
+        .poker-panel { padding: 8px 10px; border-bottom: 1px solid #26262b; }
+    .poker-row { display: flex; gap: 10px; align-items: baseline; font-size: 12px;
+      color: #a1a1aa; margin: 4px 0; flex-wrap: wrap; }
+    .poker-label { color: #71717a; flex-shrink: 0; }
+    .poker-row b, .poker-digits b { color: #fbbf24; font-family: ui-monospace, monospace;
+      font-size: 14px; margin: 0 1px; }
+    .poker-digits { font-family: ui-monospace, monospace; }
+    .poker-best { display: flex; gap: 10px; align-items: baseline; padding: 8px 10px;
+      border-bottom: 1px solid #26262b; font-size: 12px; color: #a1a1aa; }
+    .poker-best strong { color: #4ade80; font-family: ui-monospace, monospace;
+      font-size: 18px; letter-spacing: 2px; }
+    .poker-status { display: flex; gap: 8px; align-items: center; padding: 8px 10px;
+      border-bottom: 1px solid #26262b; font-size: 12px; color: #a1a1aa; flex-wrap: wrap; }
+    .poker-status b { color: #f4f4f5; }
+    .poker-note { padding: 6px 10px; border-bottom: 1px solid #26262b; font-size: 11px;
+      color: #71717a; line-height: 1.5; }
+
         .view-match { display: flex; flex-direction: column; min-height: 0; }
     .match-status { padding: 8px 10px; border-bottom: 1px solid #2c2c33; font-size: 12px;
       color: #a1a1aa; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
@@ -1850,7 +2246,7 @@
                   <button type="button" data-val="api">API</button>
                 </div>
               </div>
-              <div class="hint">四款游戏的 AI 决策均通过网站 API；房间监听及游戏提交 API 保持不变。</div>
+              <div class="hint">五款游戏的 AI 决策均通过网站 API；房间监听及游戏提交 API 保持不变。</div>
             </div>
             <div class="scroller"></div>
           </div>
@@ -1871,6 +2267,7 @@
                   <button type="button" data-val="collect">collect</button>
                   <button type="button" data-val="target">target</button>
                   <button type="button" data-val="climb">climb</button>
+                  <button type="button" data-val="poker">poker</button>
                 </div>
               </div>
               <div class="setting-row">
@@ -1972,7 +2369,7 @@
             updateControls();
         });
 
-        runBtn.addEventListener('click', () => {
+        runBtn.addEventListener('click', async () => {
             if (room?.mode === 'climb') {
                 submitClimb();
                 return;
@@ -1985,6 +2382,25 @@
             }
             if (room?.mode === 'compose') {
                 submitCompose(true);   // 手动点击允许重发
+                return;
+            }
+            if (room?.mode === 'poker') {
+                const h = pokerHand();
+                if (!h) return;
+                if (h.phase === 'showdown') {
+                    await pokerSubmitDraft();
+                    await pokerSubmitLock();
+                    return;
+                }
+                if (h.phase === 'betting' && pokerCanAct()) {
+                    const decision = await requestPokerBet();
+                    if (!decision) return;
+                    if (decision.action === 'raise' || decision.action === 'allin') {
+                        await pokerSubmitBet(decision.action, decision.raiseTo ?? undefined);
+                    } else {
+                        await pokerSubmitBet(decision.action);
+                    }
+                }
                 return;
             }
             if (candidates.length) executeRow(candidates[0]);
@@ -2111,7 +2527,8 @@
         const isCollect = room?.mode === 'collect';
         const isCompose = room?.mode === 'compose';
         const isClimb = room?.mode === 'climb';
-        settingsEl.classList.toggle('collect-mode', isCollect || isCompose || isClimb);
+        const isPoker = room?.mode === 'poker';
+        settingsEl.classList.toggle('collect-mode', isCollect || isCompose || isClimb || isPoker);
         const hint = shadow.querySelector('.collect-hint');
         if (hint) {
             if (isClimb) {
@@ -2120,6 +2537,8 @@
                 hint.innerHTML = '组合模式：网站 AI 计算最优解并 draft 提交。勾选「自动执行」自动提交。';
             } else if (isCollect) {
                 hint.innerHTML = '收集模式：由网站 AI 根据当前 Token 配置决定收下或跳过。';
+            } else if (isPoker) {
+                hint.innerHTML = 'Digit Poker：网站 AI 计算最高 EP 数字并据此下注。勾选「自动执行」后自动跟注/加注/弃牌，并在 showdown 阶段自动锁定最优数字。';
             }
         }
 
@@ -2331,6 +2750,21 @@
             const cls = rem < 10000 ? 'low' : rem < 30000 ? 'med' : '';
             parts.push(`<span class="sep">·</span><span class="countdown ${cls}">剩余 ${(rem / 1000).toFixed(1)}s</span>`);
             if (room.submitted) parts.push(`<span class="sep">·</span><span class="ok">已提交</span>`);
+        } else if (room.mode === 'poker') {
+            const h = pokerHand();
+            const s = pokerSelf();
+            const round = room.standup?.round ?? 1;
+            const rounds = room.config?.rounds ?? 1;
+            const hands = room.standup?.plannedHands ?? (room.players?.length ?? 0);
+            parts.push(`Poker 轮 <b>${round}</b>/${rounds} · 手 <b>${h?.number ?? '—'}</b>/${hands}`);
+            if (h) {
+                const rem = remainingMs();
+                const cls = rem < 5000 ? 'low' : rem < 15000 ? 'med' : '';
+                parts.push(`<span class="sep">·</span><span class="countdown ${cls}">剩余 ${(rem / 1000).toFixed(1)}s</span>`);
+                parts.push(`<span class="sep">·</span>${escapeHtml(h.street || h.phase)}`);
+                if (s?.canAct) parts.push(`<span class="sep">·</span><span class="ok">轮到你</span>`);
+                if (s?.submitted) parts.push(`<span class="sep">·</span><span class="ok">已锁定</span>`);
+            }
         } else {
             if (room.phase !== 'playing') parts.push(`<b>${escapeHtml(room.phase)}</b>`);
             else {
@@ -2403,6 +2837,23 @@
             countLabel.textContent = allSolved ? `总分 ${totalScore}` : composeSolveBusy ? '网站 AI 计算中…' : '';
             return;
         }
+        if (room?.mode === 'poker') {
+            const h = pokerHand();
+            const s = pokerSelf();
+            const canAct = canExecute();
+            runBtn.disabled = !canAct;
+            if (h?.phase === 'showdown') {
+                runBtn.textContent = s?.submitted ? '已锁定' : '锁定最优数字';
+            } else if (h?.phase === 'betting') {
+                runBtn.textContent = pokerBusy ? 'AI 思考中…' : s?.canAct ? '按 AI 下注' : '等待对手';
+            } else {
+                runBtn.textContent = '等待…';
+            }
+            countLabel.textContent = pokerState?.digits
+                ? `最优 ${pokerState.digits} · EP ${pokerState.ep}`
+                : pokerBusy ? '网站 AI 计算中…' : '';
+            return;
+        }
         const canRun = canExecute() && !executing && candidates.length > 0;
         runBtn.disabled = !canRun;
         runBtn.textContent = config.submitMode === 'api' ? 'API 提交 AI 推荐' : '填入 AI 推荐';
@@ -2445,6 +2896,16 @@
             renderedCandidatesKey = key;
             const prevScroll = scroller.scrollTop;
             scroller.replaceChildren(buildComposeView());
+            scroller.scrollTop = prevScroll;
+            return;
+        }
+        if (room?.mode === 'poker') {
+            const h = pokerHand();
+            const key = `poker:${h?.id ?? 0}:${h?.phase ?? ''}:${h?.turnId ?? 0}:${pokerState?.digits ?? ''}:${pokerBusy ? 'b' : 'i'}`;
+            if (renderedCandidatesKey === key) return;
+            renderedCandidatesKey = key;
+            const prevScroll = scroller.scrollTop;
+            scroller.replaceChildren(buildPokerView());
             scroller.scrollTop = prevScroll;
             return;
         }
@@ -2688,16 +3149,99 @@
         return wrap;
     }
     // ============================================================
+    // poker 视图
+    // ============================================================
+    function buildPokerView() {
+        const wrap = document.createElement('div');
+        const h = pokerHand();
+        const s = pokerSelf();
+
+        if (!h) {
+            const div = document.createElement('div');
+            div.className = 'empty';
+            div.textContent = room?.status === 'waiting' ? '等待牌桌开始…' : '等待牌局数据…';
+            return div;
+        }
+
+        // 私有牌 + 公共牌
+        const section = document.createElement('div');
+        section.className = 'poker-panel';
+
+        const priv = pokerPrivate().map(t => t.digit);
+        const board = pokerBoard().map(t => t.digit);
+        section.innerHTML = `<div class="poker-row">
+            <span class="poker-label">私有牌</span>
+            <span class="poker-digits">${priv.length ? priv.map(d => `<b>${d}</b>`).join(' ') : '—'}</span>
+          </div>
+          <div class="poker-row">
+            <span class="poker-label">公共牌</span>
+            <span class="poker-digits">${board.length ? board.map(d => `<b>${d}</b>`).join(' ') : '（未发牌）'}</span>
+          </div>
+          <div class="poker-row">
+            <span class="poker-label">底池</span><span>${fmt(h.pot ?? 0)}</span>
+            <span class="poker-label">当前注</span><span>${fmt(h.currentBet ?? 0)}</span>
+          </div>`;
+        wrap.appendChild(section);
+
+        // 最优数字
+        if (pokerState?.digits) {
+            const best = document.createElement('div');
+            best.className = 'poker-best';
+            best.innerHTML = `<span>最优数字</span><strong>${pokerState.digits}</strong><span>EP ${fmt(pokerState.ep)}</span>`;
+            wrap.appendChild(best);
+        } else if (pokerBusy) {
+            const div = document.createElement('div');
+            div.className = 'empty';
+            div.textContent = '网站 AI 计算中…';
+            wrap.appendChild(div);
+        }
+
+        // 状态行
+        const status = document.createElement('div');
+        status.className = 'poker-status';
+        const phaseLabel = ({ preflop: '翻牌前', flop: '翻牌', turn: '转牌', river: '河牌' })[h.street]
+            || h.street || h.phase;
+        const me = h.players.find(p => p.id === room.you);
+        status.innerHTML = `<span>${escapeHtml(phaseLabel)}</span>`;
+        if (me) {
+            status.innerHTML += `<span class="sep">·</span><span>筹码 <b>${fmt(me.chips ?? 0)}</b></span>`;
+            if (me.folded) status.innerHTML += `<span class="sep">·</span><span class="warning">已弃牌</span>`;
+            else if (me.allIn) status.innerHTML += `<span class="sep">·</span><span class="warning">全下</span>`;
+            else if (s?.canAct) status.innerHTML += `<span class="sep">·</span><span class="ok">轮到你 · 跟注 ${fmt(s.toCall ?? 0)}</span>`;
+            else if (s?.submitted) status.innerHTML += `<span class="sep">·</span><span class="ok">已锁定</span>`;
+        }
+        wrap.appendChild(status);
+
+        // 建议下注（仅轮到我们时）
+        if (h.phase === 'betting' && s?.canAct && !pokerBusy) {
+            const note = document.createElement('div');
+            note.className = 'poker-note';
+            note.textContent = '点击「按 AI 下注」将根据牌力下注/跟注/弃牌。';
+            wrap.appendChild(note);
+        }
+
+        // 鱼信息
+        if (h.fishAward) {
+            const fish = document.createElement('div');
+            fish.className = 'poker-note';
+            fish.textContent = `鱼：本手 ${fmt(h.fishAward.base)} 新 + ${fmt(h.fishAward.carriedIn)} 顺延 = ${fmt(h.fishAward.available)} 条（仅主池独赢者获得）。`;
+            wrap.appendChild(fish);
+        }
+
+        return wrap;
+    }
+    // ============================================================
     // 结果视图
     // ============================================================
     function renderResultView() {
         const view = shadow?.querySelector('.view-result');
         if (!view) return;
-        if (!latestResult || room?.mode === 'collect' || room?.mode === 'compose' || room?.mode === 'climb') {
+        if (!latestResult || room?.mode === 'collect' || room?.mode === 'compose' || room?.mode === 'climb' || room?.mode === 'poker') {
             view.innerHTML = '<div class="empty">' +
                 (room?.mode === 'collect' ? '收集模式无回合结果。'
                  : room?.mode === 'compose' ? '组合模式无回合结果。'
                      : room?.mode === 'climb' ? 'Digit Climb 答案显示在求解器页面。'
+                     : room?.mode === 'poker' ? 'Digit Poker 牌局结果由房间页面展示；求解器显示当前手的最优数字与下注建议。'
                  : '暂无结果。完成一次提交后，结果会显示在这里。') +
                 '</div>';
             renderedResultRound = null;
@@ -2801,13 +3345,13 @@
             const cd = shadow?.querySelector('.countdown');
             if (cd && room) {
 
-                if (room.mode === 'collect' || room.mode === 'compose' || room.mode === 'climb') {
+                if (room.mode === 'collect' || room.mode === 'compose' || room.mode === 'climb' || room.mode === 'poker') {
                     const rem = remainingMs();
                     cd.textContent = `剩余 ${(rem / 1000).toFixed(1)}s`;
                     cd.classList.remove('low', 'med');
                     if (rem < 10000) cd.classList.add('low');
                     else if (rem < 30000) cd.classList.add('med');
-                }else if (room.phase === 'playing') {
+                } else if (room.phase === 'playing') {
                     const rem = remainingMs();
                     cd.textContent = `剩余 ${(rem / 1000).toFixed(1)}s`;
                     cd.classList.remove('low', 'med');

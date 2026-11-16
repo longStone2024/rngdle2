@@ -7,6 +7,7 @@ const {
   GAME_IDS,
   defaultConfig,
   decide,
+  getCollectionThresholdTable,
   isUncommonNumber,
   percentileForNumber,
   prewarmCollection,
@@ -623,6 +624,32 @@ function createApiHandler(userService) {
         matched: scoring.matched,
         scoringBadges: scoring.scoringBadges,
       });
+      return;
+    }
+
+    const collectionThresholdsMatch = /^\/api\/games\/([0-9a-f-]+)\/collection-thresholds$/.exec(pathname);
+    if (method === "POST" && collectionThresholdsMatch) {
+      const game = user.games[collectionThresholdsMatch[1]];
+      if (!game) throw new UserError(404, "游戏不存在或不属于当前用户");
+      if (auth.kind === "api" && game.tokenHash !== auth.tokenHash) {
+        throw new UserError(403, "此游戏会话不属于当前 API token");
+      }
+      if (game.game !== "collection") {
+        throw new UserError(400, "此接口仅适用于 Time Collection");
+      }
+      const token = user.apiTokens[game.tokenHash];
+      if (!token) throw new UserError(404, "此游戏会话绑定的 API token 已撤销");
+      if (!token.allowedGames.includes(game.game)) {
+        throw new UserError(403, `此 API token 不允许访问 ${game.game}`);
+      }
+      const body = await parseBody(req);
+      const thresholds = await getCollectionThresholdTable(
+        userService.getTokenConfig(user, token),
+        { turns: body.turns, slots: body.slots },
+      );
+      userService.recordApiUsage(user, game.game, "decision");
+      await userService.persist();
+      jsonResponse(res, 200, { game_id: collectionThresholdsMatch[1], thresholds });
       return;
     }
 

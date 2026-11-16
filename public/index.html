@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="为四个 RNGdle 游戏配置和体验 AI，并通过个人 API token 接入自己的游戏。">
+  <meta name="description" content="为 RNGdle 游戏配置和体验 AI，并通过个人 API token 接入自己的游戏。">
   <title>RNGdle AI · 游戏控制台</title>
   <link rel="stylesheet" href="https://unpkg.com/element-ui@2.15.14/lib/theme-chalk/index.css">
   <link rel="stylesheet" href="/styles.css">
@@ -24,7 +24,7 @@
         <div class="intro">
           <div class="eyebrow">PERSONAL GAME AI</div>
           <h1>把你的游戏知识，<br><span>变成 AI 策略。</span></h1>
-          <p>{{ siteInfo.description || '为四个 RNGdle 游戏定制 AI，在线体验每一次决策，并使用独立 API token 接入自己的游戏。' }}</p>
+          <p>{{ siteInfo.description || '为 RNGdle 游戏定制 AI，在线体验每一次决策，并使用独立 API token 接入自己的游戏。' }}</p>
           <el-alert v-if="siteInfo.announcement" :title="siteInfo.announcement" type="info" :closable="false" show-icon></el-alert>
           <div class="intro-points">
             <span><i class="el-icon-circle-check"></i> 不知道的高分项不参与计算</span>
@@ -134,6 +134,8 @@
                   :busy="busy"
                   :format-score="formatScore"
                   :collection-total="collectionTotal"
+                  :thresholds="collectionMatch.thresholds"
+                  :remaining-slots="Math.max(0, 5 - collectionMatch.playerPicks.length)"
                   @start="startCollectionMatch"
                   @advance="advanceCollection"
                   @abandon="abandonMatch('collection')">
@@ -163,15 +165,48 @@
                   @abandon="abandonMatch('climb')">
                 </digit-climb-game-page>
               </el-tab-pane>
+              <el-tab-pane label="Digit Poker" name="poker">
+                <digit-poker-game-page
+                  :match="pokerMatch"
+                  :allowed="canPlay('poker')"
+                  :can-start="!anyMatchActive"
+                  :busy="busy"
+                  :format-score="formatScore"
+                  :setup="pokerSetup"
+                  :play-auth-mode="playAuthMode"
+                  @start="startPokerMatch"
+                  @action="pokerHumanAction"
+                  @preselect="pokerHumanPreselect"
+                  @lock="pokerHumanLock"
+                  @retire="pokerHumanRetire"
+                  @abandon="pokerAbandon">
+                </digit-poker-game-page>
+              </el-tab-pane>
+              <el-tab-pane label="Digit Claim" name="claim">
+                <digit-claim-game-page
+                  :match="claimMatch"
+                  :allowed="canPlay('claim')"
+                  :can-start="!anyMatchActive"
+                  :busy="busy"
+                  :format-score="formatScore"
+                  @start="startClaimMatch"
+                  @select="claimSelectDigit"
+                  @toggle-move-free="claimToggleMoveFree"
+                  @place="claimPlace"
+                  @place-free="claimPlaceFree"
+                  @suggest="claimUseSuggestion"
+                  @abandon="abandonMatch('claim')">
+                </digit-claim-game-page>
+              </el-tab-pane>
             </el-tabs>
-            <p class="footnote"><i class="el-icon-info"></i> 每个游戏使用独立 Vue 页面。Digit Composition 每场共享 120 秒（可调整），Time Collection 每步 5 秒，Target Chase 每步 10 秒，Digit Climb 四题共享 120 秒；超时本场判负。</p>
+            <p class="footnote"><i class="el-icon-info"></i> 每个游戏使用独立 Vue 页面。Digit Composition 每场共享 120 秒（可调整），Time Collection 每步 5 秒，Target Chase 每步 10 秒，Digit Climb 四题共享 120 秒；超时本场判负。Digit Poker 为好友娱乐模式（不计排位分），每手行动 15 秒、最终构造 30 秒。Digit Claim 双方从同一个 14 位数字池轮流领取，按 A B B A A B B A A B B A A B 顺序，每人全部领取共 60 秒、只在自己回合计时，超时后剩余领取随机完成。</p>
           </el-tab-pane>
 
           <el-tab-pane name="config">
             <span slot="label"><i class="el-icon-setting"></i> AI 配置</span>
             <el-card class="config-card" shadow="never">
               <div v-if="selectedApiToken" class="config-toolbar">
-                <div><h2>{{ selectedApiToken.label }} · AI 配置</h2><p>每个 API Token 的四个模式分别绑定配置组；配置组可跨 Token 和模式复用，同一组也可同时用于多个模式。此 Token 未授权的游戏不能创建会话或请求决策。</p></div>
+                <div><h2>{{ selectedApiToken.label }} · AI 配置</h2><p>每个 API Token 的各游戏模式分别绑定配置组；配置组可跨 Token 和模式复用，同一组也可同时用于多个模式。此 Token 未授权的游戏不能创建会话或请求决策。</p></div>
                 <el-select v-model="configGame" size="small" class="game-select">
                   <el-option v-for="item in allowedGameOptions" :key="item.value" :label="item.label" :value="item.value" :disabled="!selectedApiToken.allowedGames.includes(item.value)"></el-option>
                 </el-select>
@@ -191,7 +226,7 @@
                 <el-button size="small" :disabled="anyMatchActive || busy" @click="createConfigGroup">新建配置组</el-button>
                 <el-button size="small" :disabled="!selectedConfigGroup || busy" @click="renameConfigGroup">重命名</el-button>
               </div>
-              <el-alert v-else title="请先创建并选择一个 API Token，以管理它在四个模式中引用的配置组。" type="warning" :closable="false" show-icon>
+              <el-alert v-else title="请先创建并选择一个 API Token，以管理它在各模式中引用的配置组。" type="warning" :closable="false" show-icon>
                 <el-button type="text" @click="activeTab = 'tokens'">创建 API Token</el-button>
               </el-alert>
               <template v-if="selectedApiToken">
@@ -547,6 +582,29 @@
         </div>
         <div class="result-meta">你已收集 {{ match.playerPicks.length }} 个 · AI 已收集 {{ match.aiPicks.length }} 个</div>
         <div class="match-score">当前总徽章分：你 {{ formatScore(collectionTotal(match.playerPicks)) }} · AI {{ formatScore(collectionTotal(match.aiPicks)) }}</div>
+        <section v-if="thresholds.length" class="collection-thresholds">
+          <div class="collection-threshold-heading">
+            <h3>EP 门槛参考</h3>
+            <span>按你当前剩余 {{ remainingSlots }} 个槽位显示</span>
+          </div>
+          <p>依据当前 API Token 的已知徽章配置，对官方百分位 ≥ 50% 的数字分布进行有限回合动态规划。达到表中最低 EP 即建议收下；槽位已满时跳过，剩余回合不多于槽位时必须收下。</p>
+          <el-table :data="thresholds" size="mini" stripe>
+            <el-table-column prop="position" label="位置" width="76">
+              <template slot-scope="scope">
+                {{ scope.row.position }}<el-tag v-if="scope.row.position === match.turn + 1 && !match.finished" size="mini" type="primary">当前</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="remainingTurns" label="含本轮剩余回合" width="130"></el-table-column>
+            <el-table-column label="建议">
+              <template slot-scope="scope">
+                <span v-if="scope.row.bySlotsRemaining[remainingSlots].forced">必须收下</span>
+                <span v-else-if="scope.row.bySlotsRemaining[remainingSlots].action === 'skip'">槽位已满，跳过</span>
+                <span v-else-if="scope.row.bySlotsRemaining[remainingSlots].requiredEp === 0">任意 EP 均可</span>
+                <strong v-else>EP ≥ {{ scope.row.bySlotsRemaining[remainingSlots].requiredEp }}</strong>
+              </template>
+            </el-table-column>
+          </el-table>
+        </section>
         <el-table v-if="match.history.length" :data="match.history" size="mini" class="match-history">
           <el-table-column prop="turn" label="轮" width="48"></el-table-column>
           <el-table-column prop="number" label="数字"></el-table-column>
@@ -646,6 +704,214 @@
     </el-card>
   </script>
 
+  <script type="text/x-template" id="digit-poker-game-page">
+    <el-card class="game-card game-page-card" shadow="never">
+      <div class="game-heading">
+        <span class="game-icon red"><i class="el-icon-s-opportunity"></i></span>
+        <div><h2>Digit Poker</h2><p>2–6 人好友牌桌；德州扑克节奏，六位数字拼 EP 比大小</p></div>
+      </div>
+      <div v-if="!match.started" class="poker-setup">
+        <div class="poker-setup-row">
+          <span>玩家数</span>
+          <el-input-number v-model="setup.playerCount" :min="2" :max="6" :step="1" size="small"></el-input-number>
+          <span>轮数</span>
+          <el-input-number v-model="setup.rounds" :min="1" :max="10" :step="1" size="small"></el-input-number>
+        </div>
+        <div class="poker-bot-tokens">
+          <div class="poker-bot-tokens-heading">每个 Bot 使用的 API（留空 = 跟随你当前的登录身份 / 粘贴的 Token）</div>
+          <div v-for="bot in botCount" :key="bot" class="poker-bot-token-row">
+            <span class="poker-bot-label">Bot {{ bot }}</span>
+            <el-input
+              v-model="setup.botTokens[bot]"
+              type="password"
+              show-password
+              autocomplete="off"
+              size="small"
+              class="poker-bot-token-input"
+              placeholder="粘贴该 Bot 的 API Token（留空则跟随你）">
+            </el-input>
+          </div>
+          <p class="result-meta">每个 Bot 独立使用自己的 Token 与配置组；这样不同 Bot 可以有不同的“已知徽章”认知，从而打出不同策略。仅保存在当前页面内存，不落盘。</p>
+        </div>
+        <div class="inline-actions">
+          <el-button type="primary" :loading="busy" :disabled="!allowed || !canStart || busy" @click="$emit('start')">开始新牌桌</el-button>
+        </div>
+        <p class="result-meta">2–6 位朋友各 10,000 筹码；每轮固定庄家轮转（N 人打 N 手）；盲注 50/100 不变；无重买。每手用每种数字 8 张。首手 2 条鱼，此后每手 +1；主池独赢者得鱼，平分则顺延。鱼费 2.5 BB；每轮末结算后清鱼，筹码 ≤0 离桌。</p>
+      </div>
+      <template v-if="match.started">
+        <el-alert :title="match.finished ? match.winnerText : match.stage === 'construct' ? `最终构造：用私有 + 公共数字填满 6 个槽位（第 2、5 位为私有）` : `第 ${match.round} 轮 · 第 ${match.hand} 手 · ${stageLabel}`" :type="match.finished ? (match.winnerText.indexOf('你') === 0 || match.winnerText.indexOf('牌桌结束 · 你') === 0 ? 'success' : 'info') : 'info'" :closable="false"></el-alert>
+        <div v-if="!match.finished && match.stage !== 'construct'" class="decision-timer" :class="{ urgent: match.remainingSeconds <= 5 }"><i class="el-icon-timer"></i><span>本轮行动</span><strong>{{ match.remainingSeconds }}s</strong></div>
+        <div v-if="!match.finished && match.stage === 'construct'" class="decision-timer" :class="{ urgent: match.remainingSeconds <= 5 }"><i class="el-icon-timer"></i><span>最终构造</span><strong>{{ match.remainingSeconds }}s</strong></div>
+
+        <div v-if="match.finished" class="poker-result">
+          <div class="poker-result-heading"><i class="el-icon-trophy"></i> 最终结果</div>
+          <el-table :data="match.finalRanking" size="mini" stripe class="poker-ranking">
+            <el-table-column label="名次" width="70">
+              <template slot-scope="s">
+                <span v-if="s.row.rank === 1" class="poker-rank-1">🥇 {{ s.row.rank }}</span>
+                <span v-else-if="s.row.rank === 2" class="poker-rank-2">🥈 {{ s.row.rank }}</span>
+                <span v-else-if="s.row.rank === 3" class="poker-rank-3">🥉 {{ s.row.rank }}</span>
+                <span v-else>{{ s.row.rank }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="玩家">
+              <template slot-scope="s">{{ s.row.name }}{{ s.row.isHuman ? '（你）' : '' }}</template>
+            </el-table-column>
+            <el-table-column label="最终筹码" width="120">
+              <template slot-scope="s"><b>{{ s.row.chips }}</b></template>
+            </el-table-column>
+            <el-table-column label="盈亏" width="110">
+              <template slot-scope="s">
+                <span :class="s.row.profit >= 0 ? 'poker-profit' : 'poker-loss'">{{ s.row.profit >= 0 ? '+' : '' }}{{ s.row.profit }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="100">
+              <template slot-scope="s">
+                <el-tag v-if="s.row.out" size="mini" type="info">已离桌</el-tag>
+                <el-tag v-else-if="s.row.rank === 1" size="mini" type="success">冠军</el-tag>
+                <el-tag v-else size="mini" type="primary">存活</el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="poker-result-actions">
+            <el-button type="primary" size="small" :loading="busy" :disabled="!allowed || busy" @click="$emit('start')">再来一局</el-button>
+          </div>
+        </div>
+
+        <div v-if="!match.finished" class="poker-board">
+          <div class="poker-shared"><span>公共数字</span><strong>{{ match.sharedDigits.join(' · ') || '—' }}</strong></div>
+          <div class="poker-board-reveal">
+            <span class="poker-chip" :class="{revealed: match.boardRevealed >= i}" v-for="i in 5" :key="i">{{ match.sharedDigits[i-1] }}</span>
+          </div>
+          <div class="poker-pot"><span>底池</span><strong>{{ match.pot }}</strong><span v-if="match.carryFish > 0" class="poker-fish">顺延鱼 {{ match.carryFish }}</span></div>
+        </div>
+        <el-table v-if="!match.finished" :data="match.seats" size="mini" class="poker-table" row-class-name="poker-row">
+          <el-table-column label="座位" width="70"><template slot-scope="s">{{ s.row.index + 1 }}{{ s.row.isHuman ? '（你）' : '' }}</template></el-table-column>
+          <el-table-column prop="name" label="玩家"></el-table-column>
+          <el-table-column label="筹码" width="110"><template slot-scope="s"><b :class="{'neg': s.row.chips < 0}">{{ s.row.chips }}</b></template></el-table-column>
+          <el-table-column label="状态" width="110"><template slot-scope="s">
+            <el-tag v-if="s.row.out" size="mini" type="info">离桌</el-tag>
+            <el-tag v-else-if="s.row.retired" size="mini" type="info">已退役</el-tag>
+            <el-tag v-else-if="s.row.folded" size="mini" type="warning">弃牌</el-tag>
+            <el-tag v-else-if="s.row.allIn" size="mini" type="danger">全下</el-tag>
+            <el-tag v-else-if="s.row.index === match.actingSeat" size="mini" type="primary">行动中</el-tag>
+            <el-tag v-else size="mini" type="success">进行中</el-tag>
+          </template></el-table-column>
+          <el-table-column label="鱼" width="70"><template slot-scope="s"><span v-if="s.row.fish > 0">🐟 {{ s.row.fish }}</span><span v-else>—</span></template></el-table-column>
+          <el-table-column label="私有数字" width="150"><template slot-scope="s"><template v-if="s.row.isHuman || match.finished || s.row.locked"><span v-for="(d,i) in s.row.private" :key="i" class="poker-digit">{{ d }}</span></template><template v-else><span class="poker-digit muted">?</span><span class="poker-digit muted">?</span><span class="poker-digit muted">?</span></template></template></el-table-column>
+        </el-table>
+        <div v-if="isHumanTurn && !match.finished" class="poker-actions">
+          <div class="poker-action-row">
+            <el-button size="mini" :disabled="busy" @click="$emit('action', 'fold')">弃牌</el-button>
+            <el-button size="mini" :disabled="busy || match.toCall > 0" @click="$emit('action', 'check')">让牌</el-button>
+            <el-button size="mini" :disabled="busy || match.toCall === 0" @click="$emit('action', 'call')">跟注 {{ match.toCall }}</el-button>
+            <el-button size="mini" type="warning" :disabled="busy" @click="$emit('action', 'raise')">加注</el-button>
+            <el-button size="mini" type="danger" :disabled="busy" @click="$emit('action', 'allin')">全下</el-button>
+          </div>
+          <div class="poker-action-row">
+            <span class="poker-preselect-label">预选下一轮动作：</span>
+            <el-radio-group v-model="match.preselect" size="mini" @change="$emit('preselect', $event)">
+              <el-radio-button label="fold">弃牌</el-radio-button>
+              <el-radio-button label="check_fold">让牌/弃牌</el-radio-button>
+              <el-radio-button label="check">让牌</el-radio-button>
+            </el-radio-group>
+          </div>
+        </div>
+        <div v-if="match.stage === 'construct' && !match.finished && isHumanContesting" class="poker-construct">
+          <p class="result-meta">你的私有数字：<span v-for="(d,i) in humanSeat.private" :key="i" class="poker-digit">{{ d }}</span>；公共数字：<span v-for="(d,i) in match.sharedDigits" :key="i" class="poker-digit">{{ d }}</span></p>
+          <el-input v-model="match.humanDraft" maxlength="6" placeholder="输入 6 位数字（第 2、5 位用私有）" class="poker-draft-input"></el-input>
+          <div class="inline-actions">
+            <el-button type="primary" :loading="busy" :disabled="busy" @click="$emit('lock')">锁定并亮牌</el-button>
+          </div>
+        </div>
+        <div v-if="!match.finished && !isHumanTurn && match.stage !== 'construct'" class="inline-actions">
+          <el-button size="mini" :disabled="busy" @click="$emit('retire')">退役</el-button>
+          <el-button size="mini" :disabled="busy" @click="$emit('abandon')">放弃牌桌</el-button>
+        </div>
+        <div v-if="match.finished" class="poker-history">
+          <h3>牌局记录</h3>
+          <el-table :data="match.history" size="mini" stripe>
+            <el-table-column prop="round" label="轮" width="50"></el-table-column>
+            <el-table-column prop="hand" label="手" width="50"></el-table-column>
+            <el-table-column prop="board" label="公共数字"></el-table-column>
+            <el-table-column prop="summary" label="筹码"></el-table-column>
+          </el-table>
+        </div>
+        <div class="poker-log">
+          <h4>牌桌动态</h4>
+          <div v-for="(entry, i) in match.log" :key="i" class="poker-log-entry"><span>{{ entry.at }}</span>{{ entry.text }}</div>
+        </div>
+      </template>
+    </el-card>
+  </script>
+
+  <script type="text/x-template" id="digit-claim-game-page">
+    <el-card class="game-card game-page-card" shadow="never">
+      <div class="game-heading">
+        <span class="game-icon violet"><i class="el-icon-coin"></i></span>
+        <div><h2>Digit Claim</h2><p>14 位数字池轮流领取 · 顺序 A B B A A B B A A B B A A B · 每人 60 秒</p></div>
+      </div>
+      <div v-if="!match.started || match.finished" class="inline-actions">
+        <el-button type="primary" :loading="busy" :disabled="!allowed || !canStart || busy" @click="$emit('start')">开始排位练习</el-button>
+      </div>
+      <template v-if="match.started">
+        <el-alert :title="match.finished ? match.winnerText : (match.timedOut ? '超时后剩余领取已随机完成' : (isHumanTurn ? '轮到你领取：先在数字池选数字，再选择放置位置' : 'AI 正在领取…'))" :type="match.finished ? (match.winnerText.includes('胜利') ? 'success' : 'error') : (match.timedOut ? 'warning' : 'info')" :closable="false"></el-alert>
+        <div v-if="!match.finished">
+          <div class="decision-timer" :class="{ urgent: currentTime <= 10 }"><i class="el-icon-timer"></i><span>{{ currentTimeLabel }}</span><strong>{{ currentTime }}s</strong></div>
+          <div class="claim-order">
+            <span class="claim-order-label">领取顺序 · {{ humanFirstText }}</span>
+            <span v-for="item in orderLabels" :key="item.index" class="claim-order-chip" :class="{ active: item.active, done: item.done, human: item.human }">{{ item.side }}</span>
+          </div>
+          <div class="claim-pool">
+            <div class="claim-pool-heading"><span>数字池</span><strong>{{ match.pool.length }} 个</strong></div>
+            <div class="claim-pool-digits">
+              <span v-for="(digit, index) in match.pool" :key="index" class="claim-digit" :class="{ selected: match.selection === digit, disabled: !canInteract }" @click="canInteract && $emit('select', digit)">{{ digit }}</span>
+            </div>
+          </div>
+          <div class="claim-boards">
+            <section class="claim-board">
+              <div class="claim-board-heading"><span>{{ humanBoardLabel }}</span><strong>{{ formatScore(Number(match.player.fixed.join(''))) }} EP</strong></div>
+              <div class="claim-slots claim-slots-interactive">
+                <span v-for="(digit, index) in match.player.fixed" :key="index" class="claim-slot" :class="{ empty: digit === null, target: match.moveFreeMode }" @click="canInteract && $emit('place', index)">{{ digit === null ? '·' : digit }}</span>
+                <span class="claim-slot claim-free" :class="{ empty: match.player.free === null }" @click="canInteract && $emit('place-free')">
+                  <span class="claim-free-label">自由</span>
+                  <span class="claim-free-digit">{{ match.player.free === null ? '·' : match.player.free }}</span>
+                </span>
+              </div>
+            </section>
+            <section class="claim-board">
+              <div class="claim-board-heading"><span>{{ aiBoardLabel }}</span><strong>{{ formatScore(Number(match.ai.fixed.join(''))) }} EP</strong></div>
+              <div class="claim-slots">
+                <span v-for="(digit, index) in match.ai.fixed" :key="index" class="claim-slot" :class="{ empty: digit === null }">{{ digit === null ? '·' : digit }}</span>
+                <span class="claim-slot claim-free" :class="{ empty: match.ai.free === null }">
+                  <span class="claim-free-label">自由</span>
+                  <span class="claim-free-digit">{{ match.ai.free === null ? '·' : match.ai.free }}</span>
+                </span>
+              </div>
+            </section>
+          </div>
+          <p class="result-meta">先点数字池选一个数字，再点固定格放入；也可点「自由」先放入自由格，之后用「移动自由格」把它移入空固定格。自由格里的数字不参与最终数字。</p>
+          <div class="inline-actions">
+            <el-button type="primary" :loading="busy" :disabled="!canInteract" @click="$emit('suggest')">采用 AI 建议</el-button>
+            <el-button size="mini" :disabled="!canInteract || match.player.free === null" @click="$emit('toggle-move-free')">{{ match.moveFreeMode ? '取消移动自由格' : '移动自由格' }}</el-button>
+            <el-button size="mini" :disabled="busy" @click="$emit('abandon')">放弃对局</el-button>
+          </div>
+        </div>
+        <div v-if="match.finished" class="match-score">{{ match.winnerText }}</div>
+        <section class="claim-history">
+          <h3>领取记录</h3>
+          <el-table :data="match.history" size="mini" stripe class="match-history">
+            <el-table-column label="步" width="56"><template slot-scope="s">{{ s.row.index + 1 }}</template></el-table-column>
+            <el-table-column label="方" width="64"><template slot-scope="s">{{ s.row.side === 'player' ? '你' : 'AI' }}</template></el-table-column>
+            <el-table-column label="领取" width="64"><template slot-scope="s">{{ s.row.digit }}</template></el-table-column>
+            <el-table-column label="放置"><template slot-scope="s">{{ s.row.placement ? placementText(s.row.placement) : '—' }}</template></el-table-column>
+            <el-table-column label="EP" width="110"><template slot-scope="s"><strong>{{ formatScore(s.row.score) }}</strong></template></el-table-column>
+          </el-table>
+        </section>
+      </template>
+    </el-card>
+  </script>
+
   <script type="text/x-template" id="api-documentation-template">
     <section class="docs">
       <div class="docs-heading">
@@ -679,7 +945,7 @@ Content-Type: application/json</code></pre>
       <p>OAuth Client Secret 由服务器使用 <code>OAUTH_ENCRYPTION_KEY</code> 以 AES-GCM 加密持久化；管理 API 不返回明文。</p>
       <div class="endpoint">POST /api/auth/tokens</div>
       <pre><code>{ "label": "我的游戏客户端", "allowedGames": ["target", "collection"] }</code></pre>
-      <p>可用游戏为 <code>composition</code>、<code>collection</code>、<code>target</code>、<code>climb</code>；至少指定一款。每个 Token 的允许游戏范围独立；各模式分别绑定配置组，配置组可跨 Token 和模式复用。</p>
+      <p>可用游戏为 <code>composition</code>、<code>collection</code>、<code>target</code>、<code>climb</code>、<code>poker</code>、<code>claim</code>；至少指定一款。每个 Token 的允许游戏范围独立；各模式分别绑定配置组，配置组可跨 Token 和模式复用。</p>
       <div class="endpoint">PUT /api/auth/tokens/{token_id}</div>
       <pre><code>{ "label": "新的用途备注", "allowedGames": ["target"] }</code></pre>
       <p>仅网站登录会话可修改 Token 用途（备注）和允许访问的游戏；用途长度为 1–40 个字符，游戏权限至少保留一款。</p>
@@ -687,8 +953,8 @@ Content-Type: application/json</code></pre>
       <p>仅网站登录会话可轮换 Token。响应会返回新的完整 Token；旧 Token 立即失效，原用途、游戏权限、AI 配置及已有游戏会话绑定都会保留。请在响应后立即复制新值。</p>
       <h3>AI 配置组</h3>
       <div class="endpoint">GET /api/me</div>
-      <p>网站会话返回当前账户的 token 元数据、配置组及其配置；API token 只返回自身信息和该 Token 引用的配置组。不会返回 token 原文。每个 Token 的四个模式分别引用一个配置组；配置组不绑定模式，可跨 Token 和多个模式复用。</p>
-      <p>创建 Token 时会为四个模式各生成一个独立配置组；升级后首次启动会把已有的每个 Token 配置迁移为各模式配置组，原有设置会保留。</p>
+      <p>网站会话返回当前账户的 token 元数据、配置组及其配置；API token 只返回自身信息和该 Token 引用的配置组。不会返回 token 原文。每个 Token 的每个模式分别引用一个配置组；配置组不绑定模式，可跨 Token 和多个模式复用。</p>
+      <p>创建 Token 时会为每个模式各生成一个独立配置组；升级后首次启动会把已有的每个 Token 配置迁移为各模式配置组，原有设置会保留。</p>
       <div class="endpoint">GET /api/me/stats</div>
       <p>仅网站登录会话可访问，返回当前账户按游戏和总计的成功游戏 API 调用、决策、API 游戏会话、当前 Token 数，以及 UTC 小时/日/月/年调用数。部署统计功能前没有历史记录的数据按 0 返回；调用统计包含成功创建会话、决策、评分和 Time Collection 数字生成请求。</p>
       <div class="endpoint">PUT /api/auth/tokens/{token_id}/config</div>
@@ -725,13 +991,17 @@ Content-Type: application/json</code></pre>
       <div class="endpoint">POST /api/games/{game_id}/collection-number</div>
       <pre><code>{ "number": 123456, "score": 12345, "percentile": 62.5 }</code></pre>
       <p>仅适用于 Time Collection；均匀抽取 0–1,000,000 范围内官方全量计分百分位达到 50%（Top 50%）的数字。该条件与 Token 的 AI 已知徽章配置无关。Time Collection 的 <code>decide</code> 也会拒绝不符合此条件的输入。</p>
+      <div class="endpoint">POST /api/games/{game_id}/collection-thresholds</div>
+      <p>仅适用于 Time Collection。可选请求体 <code>{"turns":12,"slots":5}</code>；省略时返回默认 30 回合 / 5 槽位。返回位置 1–<code>turns</code> 在 0–<code>slots</code> 个剩余槽位下的最优门槛；<code>requiredEp</code> 是最低整数 EP，<code>forced</code> 表示必须收下，槽位为 0 时动作是 <code>skip</code>。门槛依据该游戏 Token 的已知徽章配置、官方 Uncommon+ 数字分布和剩余回合计算。Timed Collection 平局后的加时赛为 12 轮，可用 <code>{"turns":12}</code> 获取对应门槛；<code>decide</code> 的 <code>remainingTurns</code>/<code>slotsRemaining</code> 支持 1–200 轮、0–10 槽位的任意长度对局。</p>
       <table class="docs-table">
         <thead><tr><th>游戏</th><th>请求 JSON</th><th>决策行为</th></tr></thead>
         <tbody>
           <tr><td>Digit Composition<br><code>composition</code></td><td><code>{"key":[1,4,8],"open":[0,2,3,5,9]}</code></td><td>遍历合法组合，生成最佳六位数字串（首位允许为 0）。Key 仅放在第 2、5 位，每枚数字最多用一次；响应同时提供可保留前导零的 <code>digits</code> 与数值型 <code>number</code>。</td></tr>
-          <tr><td>Time Collection<br><code>collection</code></td><td><code>{"current":314159,"remainingTurns":10,"slotsRemaining":3}</code></td><td>当前数字必须属于官方全量计分百分位 ≥ 50% 的 Uncommon 或更高范围；仅返回 <code>take</code> 或 <code>skip</code>，并根据符合该条件的候选分布、该 token 已知徽章和剩余回合/槽位计算最优门槛。</td></tr>
+          <tr><td>Time Collection<br><code>collection</code></td><td><code>{"current":314159,"remainingTurns":10,"slotsRemaining":3}</code></td><td>当前数字必须属于官方全量计分百分位 ≥ 50% 的 Uncommon 或更高范围；仅返回 <code>take</code> 或 <code>skip</code>，并根据符合该条件的候选分布、该 token 已知徽章和剩余回合/槽位计算最优门槛。<code>remainingTurns</code> 支持 1–200、<code>slotsRemaining</code> 支持 0–10，可处理任意长度对局（含 12 轮加时赛）。</td></tr>
           <tr><td>Target Chase<br><code>target</code></td><td><code>{"number":314159,"target":25007367}</code></td><td>只修改一个数字位，选择按该 token 配置计分后与目标分数差距最小的合法结果。</td></tr>
           <tr><td>Digit Climb<br><code>climb</code></td><td><code>{"number":60451,"budget":5.5}</code></td><td>支持预算 3、3.5、5、5.5、7 或 7.5；数字按六位左侧补零解释（例如 <code>60451</code> 等同于 <code>060451</code>）。组合升/降一位（成本 1）、交换相邻位（1.5）和任意设置一位（3），返回按该 Token 已知徽章分数排名的前五个可达数字。可选传入 <code>answer</code> 校验玩家答案是否在预算内可达并返回分数。</td></tr>
+          <tr><td>Digit Poker<br><code>poker</code></td><td><code>{"mode":"construct","private":[1,4,8],"shared":[0,2,3,5,9]}</code></td><td>好友娱乐（不计排位分）。<code>construct</code> 用 3 张私有 + 5 张公共数字填 6 个槽位（第 2、5 位必须私有，每枚数字最多用一次），返回 EP 最高的排列；可传 <code>fixed</code> 锁定槽位获得最低 EP 合法补全。<code>bet</code> 根据私有 + 已亮公共数字计算 EP 强度并返回 <code>fold/check/call/raise/allin</code>。所有游玩数据（玩家数、筹码、盲注、鱼费、轮数、手数、位数、计时等）可通过 <code>rules</code> 配置。</td></tr>
+          <tr><td>Digit Claim<br><code>claim</code></td><td><code>{"pool":[3,1,4,1,5,9,2,6,5,3,5,8,9,7],"fixed":[null,null,null,null,null,null],"free":null,"opponent":{"fixed":[null,null,null,null,null,null],"free":null},"order":"ABBAABBAABBAAB","index":0}</code></td><td>排位 1v1。每场开始时随机决定先手方并记为 A，双方从同一个 14 位数字池按 <code>A B B A A B B A A B B A A B</code> 轮流领取，API 本身对称，由调用方传入当前方状态。<code>fixed</code> 为当前方六个固定格、<code>free</code> 为自由格，<code>opponent</code> 为对手公开状态。决策返回建议领取数字 <code>claim</code>、放置方案 <code>placement</code>（<code>moveFreeTo</code> 先把自由格移入固定格，<code>placeSlot</code> 放入固定格或 <code>placeFree</code> 放入自由格），以及按当前已知徽章计算的当前方最高 EP <code>score</code> 与对手对照 <code>opponentScore</code>。剩余领取次数可用 <code>claimsRemaining</code>/<code>opponentClaimsRemaining</code>，或用 <code>order</code> + <code>index</code> 推导。</td></tr>
         </tbody>
       </table>
       <h3>完整调用示例</h3>
@@ -746,6 +1016,7 @@ curl -X POST "https://你的域名/api/games/返回的game_id/decide" \
   -H "Content-Type: application/json" \
   -d '{"number":314159,"target":25007367}'</code></pre>
       <p>Digit Climb 使用相同的 <code>/decide</code> 端点，请求体示例：<code>{"number":60451,"budget":5.5,"answer":60451}</code>。<code>decision.solutions</code> 是五个建议项，每项含 <code>number</code>、<code>cost</code>、<code>score</code> 和命中的徽章；传入 <code>answer</code> 时额外返回校验后的 <code>decision.answer</code>。</p>
+      <p>Digit Poker 同样使用 <code>/decide</code>。构造示例：<code>{"mode":"construct","private":[1,4,8],"shared":[0,2,3,5,9],"rules":{...}}</code>，返回 <code>decision.best</code>（最高 EP 排列）；传 <code>fixed</code>（如 <code>[null,null,8,null,null,null]</code>）时额外返回 <code>decision.completion</code>（满足固定位的最低 EP 合法补全）。下注示例：<code>{"mode":"bet","private":[9,9,8],"shared":[9,9,8],"toCall":100,"pot":600,"stack":5000,"bigBlind":100,"minRaiseTo":200,"opponentsActive":2}</code>，返回 <code>decision.action</code> 与 <code>decision.strength</code>。省略 <code>rules</code> 时使用内置默认规则。</p>
       <h3>徽章元数据与错误</h3>
       <div class="endpoint">GET /api/status</div>
       <p>公开返回游戏列表、233 个官方计分点及其中英文规则、分类、分值和出现概率。</p>

@@ -8,8 +8,11 @@ const {
   isUncommonNumber,
 } = require("../official-engine");
 const {
+  COLLECTION_OVERTIME_TURNS,
   DEFAULT_SLOTS,
   DEFAULT_TURNS,
+  MAX_SLOTS,
+  MAX_TURNS,
   DecisionInputError,
   knownBadges,
   scoreNumber,
@@ -18,7 +21,7 @@ const {
 const MAX_NUMBER = 1_000_000;
 const DISTRIBUTION_SIZE = MAX_NUMBER + 1;
 const MAX_CACHED_DISTRIBUTIONS = 4;
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 const DEFAULT_CACHE_DIRECTORY = path.join(
   path.dirname(path.resolve(process.env.DATA_FILE || path.join(__dirname, "../data/store.json"))),
   "time-collection-dp",
@@ -86,11 +89,11 @@ function cacheFilePath(key) {
 
 function decodeThresholds(value, key) {
   if (!value || value.version !== CACHE_VERSION || value.key !== key
-      || !Array.isArray(value.thresholds) || value.thresholds.length !== DEFAULT_TURNS + 1) {
+      || !Array.isArray(value.thresholds) || value.thresholds.length !== MAX_TURNS + 1) {
     throw new Error("Persisted Time Collection DP cache has an invalid format");
   }
   return value.thresholds.map((row, remainingTurns) => {
-    if (!Array.isArray(row) || row.length !== DEFAULT_SLOTS + 1
+    if (!Array.isArray(row) || row.length !== MAX_SLOTS + 1
         || row.some((threshold, slotsLeft) => (
           (threshold !== null && !Number.isFinite(threshold))
           || (threshold === null && (remainingTurns === 0 || remainingTurns !== slotsLeft))
@@ -152,7 +155,7 @@ async function buildThresholds(known, key) {
   }
   scores.sort();
   const prefix = makePrefixSums(scores);
-  const thresholds = computeThresholds(scores, prefix, DEFAULT_TURNS, DEFAULT_SLOTS);
+  const thresholds = computeThresholds(scores, prefix, MAX_TURNS, MAX_SLOTS);
   await saveThresholds(key, thresholds);
   return thresholds;
 }
@@ -217,16 +220,24 @@ function setThresholdCacheDirectory(directory = DEFAULT_CACHE_DIRECTORY) {
 
 async function decide(input, gameConfig) {
   const { current, remainingTurns, slotsRemaining } = input;
+
+  // Turn/slot bounds. The base match is DEFAULT_TURNS turns; overtime uses
+  // COLLECTION_OVERTIME_TURNS. `remainingTurns` and `slotsRemaining` may be
+  // any value up to MAX_TURNS/MAX_SLOTS, so hosts can run arbitrary-length
+  // matches (including a 12-turn tiebreaker) without regenerating the engine.
+  const maxTurns = MAX_TURNS;
+  const maxSlots = MAX_SLOTS;
+
   if (!Number.isInteger(current) || current < 0 || current > MAX_NUMBER) {
     throw new DecisionInputError(`current must be an integer between 0 and ${MAX_NUMBER}`);
   }
-  if (!Number.isInteger(remainingTurns) || remainingTurns < 1 || remainingTurns > DEFAULT_TURNS) {
-    throw new DecisionInputError(`remainingTurns must be an integer between 1 and ${DEFAULT_TURNS}`);
+  if (!Number.isInteger(remainingTurns) || remainingTurns < 1 || remainingTurns > maxTurns) {
+    throw new DecisionInputError(`remainingTurns must be an integer between 1 and ${maxTurns}`);
   }
   if (!Number.isInteger(slotsRemaining) || slotsRemaining < 0
-      || slotsRemaining > Math.min(DEFAULT_SLOTS, remainingTurns)) {
+      || slotsRemaining > Math.min(maxSlots, remainingTurns)) {
     throw new DecisionInputError(
-      `slotsRemaining must be an integer between 0 and ${Math.min(DEFAULT_SLOTS, remainingTurns)}`,
+      `slotsRemaining must be an integer between 0 and ${Math.min(maxSlots, remainingTurns)}`,
     );
   }
 
@@ -257,6 +268,37 @@ async function decide(input, gameConfig) {
   };
 }
 
+async function getThresholdTable(gameConfig, options = {}) {
+  const thresholds = await getThresholds(knownBadges(gameConfig));
+  // `turns` may be 30 (base) or 12 (overtime) or any custom length.
+  const turns = Number.isInteger(options.turns) && options.turns > 0 && options.turns <= MAX_TURNS
+    ? options.turns
+    : DEFAULT_TURNS;
+  const slots = Number.isInteger(options.slots) && options.slots > 0 && options.slots <= MAX_SLOTS
+    ? options.slots
+    : DEFAULT_SLOTS;
+  return Array.from({ length: turns }, (_, index) => {
+    const remainingTurns = turns - index;
+    return {
+      position: index + 1,
+      remainingTurns,
+      bySlotsRemaining: Array.from({ length: slots + 1 }, (_, slotsRemaining) => {
+        if (slotsRemaining === 0) {
+          return { action: "skip", requiredEp: null, forced: false };
+        }
+        if (slotsRemaining >= remainingTurns) {
+          return { action: "take", requiredEp: null, forced: true };
+        }
+        return {
+          action: "threshold",
+          requiredEp: Math.max(0, Math.ceil(thresholds[remainingTurns][slotsRemaining])),
+          forced: false,
+        };
+      }),
+    };
+  });
+}
+
 module.exports = {
   computeOptimalThresholds: (scores, turns, slots) => {
     if (!Array.isArray(scores) || !scores.length) {
@@ -271,5 +313,6 @@ module.exports = {
   },
   setThresholdCacheDirectory,
   warmThresholds,
+  getThresholdTable,
   decide,
 };

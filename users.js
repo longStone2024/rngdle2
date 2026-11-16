@@ -35,6 +35,8 @@ const GAME_LABELS = {
   collection: "Time Collection",
   target: "Target Chase",
   climb: "Digit Climb",
+  poker: "Digit Poker",
+  claim: "Digit Claim",
 };
 
 function normalizeGameConfig(game, input) {

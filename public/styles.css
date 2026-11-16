@@ -90,6 +90,11 @@ body { margin: 0; background: var(--background); color: var(--ink); font-family:
 .match-score { margin: 16px 0 8px; color: #52617b; font-size: 13px; font-weight: 600; }
 .match-history { width: 100%; margin-top: 12px; }
 .match-history .cell { padding-left: 6px; padding-right: 6px; }
+.collection-thresholds { margin-top: 18px; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: #fcfdff; }
+.collection-threshold-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.collection-threshold-heading h3 { margin: 0; font-size: 14px; }
+.collection-threshold-heading span, .collection-thresholds > p { color: var(--muted); font-size: 12px; }
+.collection-thresholds > p { line-height: 1.6; }
 .game-heading { display: flex; gap: 13px; align-items: center; margin-bottom: 22px; }
 .game-heading h2 { font-size: 16px; margin: 0 0 5px; }
 .game-heading p { color: var(--muted); font-size: 12px; margin: 0; line-height: 1.5; }
@@ -98,6 +103,7 @@ body { margin: 0; background: var(--background); color: var(--ink); font-family:
 .game-icon.blue { color: #3968d8; background: #e9f0ff; }
 .game-icon.violet { color: #7653c8; background: #f1eaff; }
 .game-icon.green { color: #25835b; background: #e6f7ee; }
+.game-icon.red { color: #c63d4a; background: #ffecec; }
 .el-input-number { width: 100%; }
 .form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .inline-actions { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -106,6 +112,79 @@ body { margin: 0; background: var(--background); color: var(--ink); font-family:
 .result-number { color: var(--blue); font-size: 28px; letter-spacing: 1px; }
 .result-action { color: #34725a; font-size: 21px; }
 .result-meta { color: #77849a; font-size: 12px; margin-top: 7px; line-height: 1.5; }
+
+.poker-setup { margin: 14px 0; }
+.poker-setup-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: #586780; font-size: 13px; margin-bottom: 12px; }
+.poker-setup-row .el-input-number { width: 120px; }
+.poker-bot-tokens { margin: 4px 0 12px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fbfcfe; }
+.poker-bot-tokens-heading { font-size: 13px; font-weight: 600; color: #263752; margin-bottom: 10px; }
+.poker-bot-token-row { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: center; margin: 6px 0; }
+.poker-bot-label { color: #586780; font-size: 13px; font-weight: 600; }
+.poker-bot-token-input { width: 100%; }
+.poker-board { display: grid; gap: 10px; margin: 12px 0; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: #fcfdff; }
+.poker-board > div { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #586780; }
+.poker-board strong { color: #263752; font-size: 16px; font-variant-numeric: tabular-nums; }
+.poker-board-reveal { gap: 6px; }
+.poker-chip { display: inline-grid; place-items: center; width: 34px; height: 34px; border: 1px solid #dfe8ff; border-radius: 8px; background: #f5f8ff; color: #9aa8c2; font-size: 16px; font-weight: 600; }
+.poker-chip.revealed { color: #3158c6; background: #e9f0ff; border-color: #c3d4ff; }
+.poker-fish { color: #b77911; font-weight: 600; }
+.poker-table { margin: 12px 0; }
+.poker-row.current { background: #fff7e6; }
+.poker-digit { display: inline-grid; place-items: center; width: 26px; height: 26px; margin: 0 2px; border-radius: 6px; background: #f0f4ff; color: #3158c6; font-weight: 700; font-variant-numeric: tabular-nums; }
+.poker-digit.muted { color: #b4bfd2; background: #f5f7fa; }
+.poker-actions { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fcfdff; }
+.poker-action-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0; }
+.poker-preselect-label { color: #586780; font-size: 12px; }
+.poker-construct { margin: 12px 0; padding: 14px; border: 1px solid #f1c7c7; border-radius: 9px; background: #fff8f8; }
+.poker-draft-input { max-width: 220px; }
+.poker-history { margin-top: 16px; }
+.poker-history h3 { font-size: 14px; margin: 8px 0; }
+.poker-result { margin: 14px 0; padding: 14px; border: 1px solid #d6e6d9; border-radius: 10px; background: #f4fbf5; }
+.poker-result-heading { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: #25835b; margin-bottom: 10px; }
+.poker-result-heading i { color: #d4a017; font-size: 18px; }
+.poker-result-actions { margin-top: 10px; display: flex; justify-content: flex-end; }
+.poker-ranking { margin-bottom: 4px; }
+.poker-rank-1 { color: #d4a017; font-weight: 700; }
+.poker-rank-2 { color: #8b9bb0; font-weight: 700; }
+.poker-rank-3 { color: #b0723a; font-weight: 700; }
+.poker-profit { color: #25835b; font-weight: 700; }
+.poker-loss { color: #c63d4a; font-weight: 700; }
+.poker-log { margin-top: 16px; max-height: 240px; overflow-y: auto; border: 1px solid var(--line); border-radius: 9px; padding: 10px; background: #fbfcfe; }
+.poker-log h4 { margin: 0 0 8px; font-size: 13px; color: #263752; }
+.poker-log-entry { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 3px 0; font-size: 12px; color: #586780; }
+.poker-log-entry span { color: #9aa8c2; font-variant-numeric: tabular-nums; }
+.neg { color: #c63d4a; }
+
+.claim-order { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 12px 0; color: #586780; font-size: 12px; }
+.claim-order-label { margin-right: 4px; }
+.claim-order-chip { display: inline-grid; place-items: center; width: 26px; height: 26px; border: 1px solid #dfe8ff; border-radius: 7px; background: #f5f8ff; color: #9aa8c2; font-weight: 700; font-size: 13px; }
+.claim-order-chip.done { color: #b9c4d8; background: #f7f9fc; border-color: #e7ebf2; }
+.claim-order-chip.human { border-color: #bcd0ff; color: #2f56c4; }
+.claim-order-chip.active { color: #fff; background: var(--blue); border-color: var(--blue); box-shadow: 0 0 0 3px rgba(56, 103, 232, 0.18); }
+.claim-pool { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fcfdff; }
+.claim-pool-heading { display: flex; align-items: center; justify-content: space-between; color: #586780; font-size: 12px; margin-bottom: 10px; }
+.claim-pool-heading strong { color: var(--blue); font-size: 14px; }
+.claim-pool-digits { display: flex; flex-wrap: wrap; gap: 8px; }
+.claim-digit { display: inline-grid; place-items: center; width: 38px; height: 38px; border: 1px solid #dfe8ff; border-radius: 8px; background: #f5f8ff; color: #3158c6; font-weight: 700; font-size: 18px; cursor: pointer; user-select: none; }
+.claim-digit:hover { border-color: var(--blue); }
+.claim-digit.selected { background: var(--blue); border-color: var(--blue); color: #fff; box-shadow: 0 0 0 3px rgba(56, 103, 232, 0.18); }
+.claim-digit.disabled { color: #c3cddf; background: #f7f9fc; cursor: not-allowed; }
+.claim-boards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
+.claim-board { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fcfdff; }
+.claim-board-heading { display: flex; align-items: center; justify-content: space-between; color: #586780; font-size: 12px; margin-bottom: 10px; }
+.claim-board-heading strong { color: var(--blue); font-size: 14px; }
+.claim-slots { display: flex; gap: 6px; }
+.claim-slot { display: inline-grid; place-items: center; width: 38px; height: 38px; border: 1px solid #dfe8ff; border-radius: 8px; background: #f5f8ff; color: #3158c6; font-weight: 700; font-size: 18px; }
+.claim-slot.empty { color: #c3cddf; background: #f7f9fc; }
+.claim-slot.target { border-color: var(--blue); border-style: dashed; }
+.claim-slots-interactive .claim-slot { cursor: pointer; }
+.claim-slots-interactive .claim-slot:hover { border-color: var(--blue); }
+.claim-free { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; font-size: 11px; color: #78849a; background: #eef3ff; }
+.claim-free-label { font-size: 10px; font-weight: 500; }
+.claim-free-digit { font-size: 18px; font-weight: 700; color: #3158c6; }
+.claim-history { margin-top: 16px; }
+.claim-history h3 { font-size: 14px; margin: 0 0 8px; }
+
 .tag-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
 .footnote { color: #8792a5; font-size: 12px; margin: 17px 3px 0; }
 .config-card, .token-card { padding: 4px; }
@@ -247,6 +326,7 @@ body { margin: 0; background: var(--background); color: var(--ink); font-family:
   .composition-time-setting { align-items: flex-start; flex-wrap: wrap; }
   .composition-rounds { grid-template-columns: 1fr; }
   .climb-rounds { grid-template-columns: 1fr; }
+  .claim-boards { grid-template-columns: 1fr; }
   .play-setup .el-radio-group { display: grid; gap: 8px; }
   .play-setup .el-radio-button, .play-setup .el-radio-button__inner { width: 100%; }
   .match-history { overflow-x: auto; }

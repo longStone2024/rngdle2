@@ -28,7 +28,7 @@ test("public status exposes the official features used by the configuration UI",
 
   const payload = JSON.parse(response.body);
   assert.equal(response.status, 200);
-  assert.deepEqual(payload.games, ["composition", "collection", "target", "climb"]);
+  assert.deepEqual(payload.games, ["composition", "collection", "target", "climb", "poker", "claim"]);
   assert.equal(Array.isArray(payload.features), true);
   assert.equal(payload.features.length, 233);
   assert.equal(payload.features.some(({ id }) => id === "VOID"), true);

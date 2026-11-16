@@ -20,6 +20,7 @@ const {
   computeOptimalThresholds,
   decide,
   prewarmCollection,
+  getCollectionThresholdTable,
   setThresholdCacheDirectory,
 } = require("../games");
 
@@ -28,6 +29,31 @@ function findCommonNumber() {
     if (!isUncommonNumber(number)) return number;
   }
   throw new Error("No number below the Uncommon percentile cutoff was found");
+}
+
+const CLAIM_ORDER = "ABBAABBAABBAAB";
+
+function applyClaimPlacement(side, placement, digit) {
+  const fixed = side.fixed.slice();
+  let free = side.free;
+  if (placement.moveFreeTo !== null && placement.moveFreeTo !== undefined) {
+    fixed[placement.moveFreeTo] = free;
+    free = null;
+  }
+  if (placement.placeFree) {
+    free = digit;
+  } else if (placement.placeSlot !== null && placement.placeSlot !== undefined) {
+    fixed[placement.placeSlot] = digit;
+  }
+  return { fixed, free };
+}
+
+function claimsRemainingFromOrder(order, index, player) {
+  let count = 0;
+  for (let position = index; position < order.length; position += 1) {
+    if (order[position] === player) count += 1;
+  }
+  return count;
 }
 
 test("official calculator produces the game's exact score and percentile", () => {
@@ -163,8 +189,37 @@ test("Time Collection prewarming shares the personalized distribution with later
   assert.equal(decision.threshold, 0);
 });
 
-test("Time Collection persists DP thresholds and reloads them from disk", async (t) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "rngdle-collection-dp-"));
+test("Time Collection supports 12-turn overtime and arbitrary turn/slot counts", async () => {
+  const config = defaultConfig();
+  // 12-turn overtime decision must be accepted (not rejected as >30 turns).
+  const overtime = await decide("collection", {
+    current: 314_159,
+    remainingTurns: 12,
+    slotsRemaining: 3,
+  }, config);
+  assert.equal(overtime.game, "collection");
+  assert.ok(["take", "skip"].includes(overtime.action));
+
+  // Overtime threshold table has exactly 12 positions.
+  const table = await getCollectionThresholdTable(config, { turns: 12 });
+  assert.equal(table.length, 12);
+  assert.equal(table[0].position, 1);
+  assert.equal(table[0].remainingTurns, 12);
+  assert.equal(table[11].remainingTurns, 1);
+
+  // Arbitrary-length tables are also supported.
+  const custom = await getCollectionThresholdTable(config, { turns: 7, slots: 4 });
+  assert.equal(custom.length, 7);
+  assert.equal(custom[0].bySlotsRemaining.length, 5); // slots+1 columns
+
+  // Out-of-range turn counts are rejected.
+  await assert.rejects(
+    () => decide("collection", { current: 1, remainingTurns: 999, slotsRemaining: 1 }, config),
+    /remainingTurns must be an integer between 1 and 200/,
+  );
+});
+
+test("Time Collection persists DP thresholds and reloads them from disk", async (t) => {  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "rngdle-collection-dp-"));
   t.after(async () => {
     setThresholdCacheDirectory();
     await fs.rm(directory, { recursive: true, force: true });
@@ -177,7 +232,7 @@ test("Time Collection persists DP thresholds and reloads them from disk", async 
   const files = await fs.readdir(directory);
   assert.equal(files.length, 1);
   const persisted = JSON.parse(await fs.readFile(path.join(directory, files[0]), "utf8"));
-  assert.equal(persisted.version, 1);
+  assert.equal(persisted.version, 2);
   assert.ok(Array.isArray(persisted.thresholds));
 
   setThresholdCacheDirectory(directory);
@@ -258,8 +313,273 @@ test("Digit Climb pads short room numbers to six digits and validates padded ans
   assert.ok(result.solutions.length > 0);
 });
 
+test("Digit Poker constructs the highest-EP six-slot arrangement with private slots 2 and 5", async () => {
+  const config = defaultConfig();
+  const result = await decide("poker", {
+    mode: "construct",
+    private: [1, 4, 8],
+    shared: [0, 2, 3, 5, 9],
+  }, config);
+  assert.equal(result.game, "poker");
+  assert.equal(result.best.digits.length, 6);
+  assert.equal(result.best.arrangement.length, 6);
+  // Slots 2 and 5 (index 1 and 4) must carry private tokens.
+  assert.equal(result.best.arrangement[1][0], "p");
+  assert.equal(result.best.arrangement[4][0], "p");
+  assert.notEqual(result.best.arrangement[1], result.best.arrangement[4]);
+  assert.equal(new Set(result.best.arrangement).size, 6);
+  assert.equal(result.best.score, analyzeNumber(result.best.number).totalScore);
+  // The returned score must equal the best over all legal arrangements.
+  const { solveConstruction } = require("../games/digit-poker");
+  const known = new Set(require("../official-engine").features.map(({ id }) => id));
+  const exhaustive = solveConstruction([1, 4, 8], [0, 2, 3, 5, 9], require("../games").POKER_RULES, known, null, false);
+  assert.equal(result.best.score, exhaustive.score);
+  assert.equal(result.best.number, exhaustive.number);
+});
+
+test("Digit Poker returns the lowest-EP legal completion when slots are fixed", async () => {
+  const config = defaultConfig();
+  const result = await decide("poker", {
+    mode: "construct",
+    private: [1, 4, 8],
+    shared: [0, 2, 3, 5, 9],
+    fixed: [9, null, 8, null, null, null],
+  }, config);
+  assert.equal(result.completion.digits.length, 6);
+  assert.equal(result.completion.digits[0], "9");
+  assert.equal(result.completion.digits[2], "8");
+  assert.equal(result.completion.arrangement[1][0], "p");
+  assert.equal(result.completion.arrangement[4][0], "p");
+  // Fixed slots must be respected.
+  assert.equal(result.completion.digits[0], "9");
+  assert.equal(result.completion.digits[2], "8");
+});
+
+test("Digit Poker betting returns a valid action with strength estimate", async () => {
+  const config = defaultConfig();
+  const result = await decide("poker", {
+    mode: "bet",
+    private: [9, 9, 8],
+    shared: [9, 9, 8, 7, 6],
+    toCall: 100,
+    pot: 600,
+    stack: 5000,
+    bigBlind: 100,
+    minRaiseTo: 200,
+    opponentsActive: 2,
+  }, config);
+  assert.equal(result.game, "poker");
+  assert.equal(result.mode, "bet");
+  assert.ok(["fold", "check", "call", "raise", "allin"].includes(result.action));
+  assert.ok(Number.isFinite(result.strength.percentile));
+  assert.ok(result.strength.score >= 0);
+});
+
+test("Digit Poker betting strength ranks against achievable hands, not all integers", async () => {
+  const config = defaultConfig();
+  // A mediocre preflop hand must NOT look elite (the old percentileForScore
+  // saturated at ~99% for every optimized hand, causing constant all-ins).
+  const weak = await decide("poker", {
+    mode: "bet",
+    private: [1, 4, 8],
+    shared: [],
+    toCall: 100,
+    pot: 150,
+    stack: 10000,
+    bigBlind: 100,
+    minRaiseTo: 200,
+    currentBet: 100,
+    opponentsActive: 2,
+  }, config);
+  assert.ok(weak.strength.floor < 50, `preflop floor should be weak, got ${weak.strength.floor}`);
+  assert.ok(weak.strength.ceiling <= 100);
+  assert.equal(["fold", "call"].includes(weak.action), true, `weak preflop should not raise, got ${weak.action}`);
+
+  // A truly monster river hand should be strong (floor >= 90) but the bot must
+  // still size bets modestly rather than always shoving.
+  const monster = await decide("poker", {
+    mode: "bet",
+    private: [9, 9, 9],
+    shared: [9, 9, 9, 9, 9],
+    toCall: 0,
+    pot: 1000,
+    stack: 10000,
+    bigBlind: 100,
+    minRaiseTo: 200,
+    currentBet: 0,
+    opponentsActive: 1,
+  }, config);
+  assert.ok(monster.strength.floor >= 90, `river monster should be strong, got ${monster.strength.floor}`);
+  assert.equal(monster.action, "raise");
+  assert.ok(monster.raiseTo <= 3000, `raise must be modest, got ${monster.raiseTo}`);
+});
+
+test("Digit Poker validates mode and rules", async () => {
+  const config = defaultConfig();
+  await assert.rejects(() => decide("poker", { mode: "fold" }, config), /mode must be one of/);
+  await assert.rejects(
+    () => decide("poker", { mode: "construct", private: [1, 2], shared: [0, 1, 2, 3, 4] }, config),
+    /exactly 3 digits/,
+  );
+  await assert.rejects(
+    () => decide("poker", { mode: "construct", private: [1, 4, 8], shared: [0, 2, 3, 5, 9], rules: { bigBlind: 0 } }, config),
+    /blinds are invalid/,
+  );
+});
+
+test("Digit Claim is a registered game with its own knowledge config", () => {
+  const config = defaultConfig();
+  assert.ok(require("../games").GAME_IDS.includes("claim"));
+  assert.ok(config.games.claim);
+  assert.ok(config.games.claim.knowledge.VOID.known === true);
+});
+
+test("Digit Claim returns a legal claim and placement scored with the official engine", async () => {
+  const config = defaultConfig();
+  const pool = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7];
+  const result = await decide("claim", {
+    pool,
+    fixed: [null, null, null, null, null, null],
+    free: null,
+    opponent: { fixed: [null, null, null, null, null, null], free: null },
+    order: CLAIM_ORDER,
+    index: 0,
+  }, config);
+  assert.equal(result.game, "claim");
+  assert.ok(pool.includes(result.claim));
+  assert.equal(result.claimOrder, CLAIM_ORDER);
+  assert.equal(result.claimSeconds, 60);
+  assert.ok(result.placement);
+  assert.equal(typeof result.placement.moveFreeTo === "number" || result.placement.moveFreeTo === null, true);
+  assert.equal(typeof result.placement.placeSlot === "number" || result.placement.placeSlot === null, true);
+  assert.equal(typeof result.placement.placeFree, "boolean");
+  assert.ok(Number.isInteger(result.score) && result.score >= 0);
+  assert.ok(Number.isInteger(result.opponentScore) && result.opponentScore >= 0);
+  assert.ok(result.projectedNumber >= 0 && result.projectedNumber <= 999999);
+  assert.equal(
+    result.score,
+    scoreNumber(result.projectedNumber, config.games.claim).score,
+  );
+  assert.equal(result.knowledgeUsed, result.matched.length);
+});
+
+test("Digit Claim derives remaining claims from the claim order", async () => {
+  const config = defaultConfig();
+  const pool = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 2, 3, 4];
+  const first = await decide("claim", {
+    pool,
+    fixed: new Array(6).fill(null),
+    free: null,
+    order: CLAIM_ORDER,
+    index: 0,
+  }, config);
+  assert.ok(pool.includes(first.claim));
+  // The first claim belongs to A, who has all seven A claims left.
+  const last = await decide("claim", {
+    pool,
+    fixed: new Array(6).fill(null),
+    free: null,
+    order: CLAIM_ORDER,
+    index: CLAIM_ORDER.length - 1,
+  }, config);
+  assert.ok(pool.includes(last.claim));
+  // The explicit counts are accepted and equivalent.
+  const explicit = await decide("claim", {
+    pool,
+    fixed: new Array(6).fill(null),
+    free: null,
+    claimsRemaining: 7,
+    opponentClaimsRemaining: 7,
+  }, config);
+  assert.ok(pool.includes(explicit.claim));
+  assert.equal(claimsRemainingFromOrder(CLAIM_ORDER, 0, "A"), 7);
+  assert.equal(claimsRemainingFromOrder(CLAIM_ORDER, 0, "B"), 7);
+});
+
+test("Digit Claim validates its state and claim bookkeeping", async () => {
+  const config = defaultConfig();
+  await assert.rejects(
+    () => decide("claim", {
+      pool: [1, 2, 3],
+      fixed: new Array(6).fill(null),
+      free: null,
+    }, config),
+    /claimsRemaining|order with index/,
+  );
+  await assert.rejects(
+    () => decide("claim", {
+      pool: [1, 2, 3],
+      fixed: new Array(5).fill(null),
+      free: null,
+      claimsRemaining: 1,
+    }, config),
+    /exactly 6/,
+  );
+  await assert.rejects(
+    () => decide("claim", {
+      pool: [1, 2, 3],
+      fixed: new Array(6).fill(null),
+      free: 11,
+      claimsRemaining: 1,
+    }, config),
+    /free must be a digit/,
+  );
+  await assert.rejects(
+    () => decide("claim", {
+      pool: [1, 2, 30],
+      fixed: new Array(6).fill(null),
+      free: null,
+      claimsRemaining: 1,
+    }, config),
+    /pool must contain at most 14 digits/,
+  );
+  await assert.rejects(
+    () => decide("claim", {
+      pool: [1, 2, 3],
+      fixed: new Array(6).fill(null),
+      free: null,
+      claimsRemaining: 1,
+      opponent: { fixed: new Array(6).fill(null), free: 99 },
+    }, config),
+    /opponent.free/,
+  );
+});
+
+test("Digit Claim plays a full match with legal moves and a drained pool", async () => {
+  const config = defaultConfig();
+  const pool = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7];
+  const sides = {
+    A: { fixed: new Array(6).fill(null), free: null },
+    B: { fixed: new Array(6).fill(null), free: null },
+  };
+  const remaining = pool.slice();
+  for (let index = 0; index < CLAIM_ORDER.length; index += 1) {
+    const player = CLAIM_ORDER[index] === "A" ? "A" : "B";
+    const opponent = player === "A" ? "B" : "A";
+    const decision = await decide("claim", {
+      pool: remaining,
+      fixed: sides[player].fixed,
+      free: sides[player].free,
+      opponent: { fixed: sides[opponent].fixed, free: sides[opponent].free },
+      order: CLAIM_ORDER,
+      index,
+    }, config);
+    assert.ok(remaining.includes(decision.claim), `claim ${decision.claim} must be in the pool`);
+    remaining.splice(remaining.indexOf(decision.claim), 1);
+    const next = applyClaimPlacement(sides[player], decision.placement, decision.claim);
+    sides[player].fixed = next.fixed;
+    sides[player].free = next.free;
+  }
+  assert.equal(remaining.length, 0);
+  for (const side of [sides.A, sides.B]) {
+    const numberString = side.fixed.join("");
+    assert.equal(numberString.length, 6);
+    assert.ok(numberString.split("").every((digit) => /[0-9]/.test(digit)));
+  }
+});
+
 test("decisions reject unknown games and malformed game inputs", async () => {
-  await assert.rejects(() => decide("poker", {}, defaultConfig()), /Unknown game/);
+  await assert.rejects(() => decide("nope", {}, defaultConfig()), /Unknown game/);
   await assert.rejects(() => decide("composition", {
     key: [1, 2],
     open: [0, 1, 2, 3, 4],
